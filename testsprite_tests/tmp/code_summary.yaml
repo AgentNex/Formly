@@ -1,0 +1,67 @@
+projectName: Formly
+version: 1.0.0
+description: "Enterprise-grade node-based form and workflow builder platform built with Next.js 14, React Flow (@xyflow/react), and Convex BaaS."
+
+technologyStack:
+  frontend:
+    framework: Next.js 14 (App Router)
+    uiLibrary: React 18
+    nodeEditor: "@xyflow/react (React Flow v12)"
+    styling: Tailwind CSS 3.4
+    icons: Lucide React
+    qrEngine: qrcode.react
+  backend:
+    platform: Convex BaaS
+    runtime: TypeScript
+    database: PostgreSQL Document-Relational Reactive DB
+    compiler: Server-authoritative DAG validator with cycle detection
+  security:
+    headers: Strict-Transport-Security, Content-Security-Policy, X-Frame-Options SAMEORIGIN, X-Content-Type-Options nosniff
+    compliance: Toggleable PII redaction and idempotent submission intents
+
+coreFeatures:
+  - id: organization_and_project_management
+    name: "Multi-Tenant Workspace & Project Management"
+    description: "Organization tenant hierarchy with 4-tier RBAC (owner, admin, member, viewer), project lifecycle, and starter workflow templates."
+    endpoints:
+      - query: api.projects.listProjects
+      - query: api.projects.getProjectById
+      - mutation: api.projects.createProject
+      - mutation: api.projects.updateProject
+      - mutation: api.projects.deleteProject
+      - query: api.organizations.listOrganizations
+      - mutation: api.organizations.createOrganization
+
+  - id: visual_dag_flow_editor
+    name: "Visual DAG Canvas Editor"
+    description: "Interactive node canvas with topological auto-layout, 22 field types, multi-condition logic branching (AND/OR), 30-step undo/redo, and clipboard operations."
+    endpoints:
+      - query: api.forms.getFormById
+      - mutation: api.forms.saveDraft
+      - mutation: api.forms.publishForm
+      - mutation: api.forms.unpublishForm
+      - mutation: api.forms.rollbackToVersion
+
+  - id: conversational_respondent_runtime
+    name: "Conversational Form Respondent Runtime"
+    description: "Touch-friendly public runner (/f/[slug]) with active-path progress calculation, answer pruning on branch rollback, and idempotent submissions."
+    endpoints:
+      - query: api.forms.getPublishedFormBySlug
+      - mutation: api.submissions.submitFormResponse
+      - mutation: api.analytics.logEvent
+
+  - id: telemetry_and_submissions_inbox
+    name: "Telemetry Analytics & Submissions Inbox"
+    description: "Pre-aggregated hourly analytics, visual step drop-off funnels, response distributions, submissions inbox with search, status workflows (Verified/Flagged/Archived), PII masking, and CSV/JSON exports."
+    endpoints:
+      - query: api.analytics.getFormAnalytics
+      - query: api.submissions.listSubmissions
+      - query: api.submissions.getSubmissionDetail
+      - mutation: api.submissions.updateSubmissionStatus
+
+  - id: distribution_and_vector_qr
+    name: "Distribution & Vector QR Hub"
+    description: "Instant shareable hosted links, responsive QR code generator in PNG and SVG formats, and form pause controls."
+    endpoints:
+      - query: api.forms.getFormShareInfo
+      - mutation: api.forms.toggleFormActiveState

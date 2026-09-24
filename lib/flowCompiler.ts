@@ -292,7 +292,14 @@ export function getNextStep(
       : current.falseNextNodeId || current.defaultNextNodeId;
 
     if (!nextId) return null;
-    return getNextStep(nextId, answers, schema, visited);
+    const target = schema.steps[nextId];
+    if (!target) return null;
+
+    if (target.type === "logic") {
+      return getNextStep(nextId, answers, schema, visited);
+    }
+
+    return target;
   }
 
   // If standard node, look at defaultNextNodeId

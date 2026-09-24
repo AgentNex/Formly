@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node ./node_modules/typescript/bin/tsc convex/compiler.ts lib/flowCompiler.ts --outDir ./dist --module esnext --target es2022 --moduleResolution node --skipLibCheck && node --test tests/compiler.test.mjs"
+    "test": "node ./node_modules/typescript/bin/tsc lib/utils.ts lib/user.ts convex/compiler.ts lib/flowCompiler.ts --outDir ./dist --module esnext --target es2022 --moduleResolution node --skipLibCheck && node --test tests/compiler.test.mjs tests/unit_test_all_files.test.mjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.11.5",
