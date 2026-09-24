@@ -3,8 +3,7 @@
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import React, { ReactNode, useMemo, useState, useEffect } from "react";
 
-const convexUrl =
-  process.env.NEXT_PUBLIC_CONVEX_URL || "https://omnisync-core.convex.cloud";
+const rawConvexUrl = process.env.NEXT_PUBLIC_CONVEX_URL?.trim();
 
 export function ConvexClientProvider({ children }: { children: ReactNode }) {
   const [mounted, setMounted] = useState(false);
@@ -14,10 +13,11 @@ export function ConvexClientProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const client = useMemo(() => {
+    if (!rawConvexUrl) {
+      return null;
+    }
     try {
-      return new ConvexReactClient(convexUrl, {
-        reportLoaderErrors: false,
-      });
+      return new ConvexReactClient(rawConvexUrl);
     } catch {
       return null;
     }

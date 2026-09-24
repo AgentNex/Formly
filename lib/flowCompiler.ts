@@ -1,4 +1,14 @@
-import { FormNode, FormEdge, CompiledFormSchema, CompiledStep, FieldNodeData, LogicNodeData, StartNodeData, EndNodeData } from "./types/flow";
+import {
+  FormNode,
+  FormEdge,
+  CompiledFormSchema,
+  CompiledStep,
+  FieldNodeData,
+  LogicNodeData,
+  StartNodeData,
+  EndNodeData,
+  LogicRule,
+} from "./types/flow";
 
 export interface CompileResult {
   schema: CompiledFormSchema;
@@ -25,7 +35,6 @@ export function compileFlow(
   const startNodeId = startNode ? startNode.id : nodes[0]?.id || "node_start";
 
   // 2. Build edge connection lookups
-  // For each source node, map handle -> target
   const edgeMap: Record<string, { default?: string; truePath?: string; falsePath?: string }> = {};
 
   for (const edge of edges) {
@@ -39,7 +48,6 @@ export function compileFlow(
     } else if (edge.sourceHandle === "false") {
       edgeMap[edge.source].falsePath = edge.target;
     } else {
-      // Standard or first edge
       if (!edgeMap[edge.source].default) {
         edgeMap[edge.source].default = edge.target;
       }
@@ -79,6 +87,10 @@ export function compileFlow(
         options: data.options || [],
         min: data.min,
         max: data.max,
+        step: data.step,
+        currencySymbol: data.currencySymbol,
+        rows: data.rows,
+        columns: data.columns,
         defaultNextNodeId: conn.default,
       };
     } else if (node.type === "logicNode") {
@@ -91,6 +103,8 @@ export function compileFlow(
         targetFieldId: data.targetFieldId || "",
         condition: data.condition || "equals",
         compareValue: data.compareValue || "",
+        combinator: data.combinator || "AND",
+        rules: data.rules || [],
         trueNextNodeId: conn.truePath || conn.default,
         falseNextNodeId: conn.falsePath || conn.default,
         defaultNextNodeId: conn.default,
@@ -131,7 +145,103 @@ export function compileFlow(
 }
 
 /**
- * Evaluates the next step to execute, automatically resolving logic gates.
+ * True DAG Auto-Layout Algorithm.
+ * Computes topological layers (longest path) and assigns balanced coordinates.
+ */
+export function applyDagLayout(nodes: FormNode[], edges: FormEdge[]): FormNode[] {
+  if (nodes.length === 0) return [];
+
+  const nodeMap = new Map<string, FormNode>(nodes.map((n) => [n.id, n]));
+  const inDegree = new Map<string, number>();
+  const outgoing = new Map<string, string[]>();
+  const incoming = new Map<string, string[]>();
+
+  for (const n of nodes) {
+    inDegree.set(n.id, 0);
+    outgoing.set(n.id, []);
+    incoming.set(n.id, []);
+  }
+
+  for (const e of edges) {
+    if (nodeMap.has(e.source) && nodeMap.has(e.target)) {
+      outgoing.get(e.source)!.push(e.target);
+      incoming.get(e.target)!.push(e.source);
+      inDegree.set(e.target, (inDegree.get(e.target) || 0) + 1);
+    }
+  }
+
+  // Find root nodes (inDegree === 0, preferring startNode)
+  const ranks = new Map<string, number>();
+  const startNode = nodes.find((n) => n.type === "startNode");
+
+  function computeRank(nodeId: string, visited: Set<string>): number {
+    if (visited.has(nodeId)) return ranks.get(nodeId) || 0;
+    visited.add(nodeId);
+
+    const inc = incoming.get(nodeId) || [];
+    if (inc.length === 0) {
+      ranks.set(nodeId, 0);
+      return 0;
+    }
+
+    let maxPredRank = -1;
+    for (const pred of inc) {
+      const predRank = computeRank(pred, visited);
+      if (predRank > maxPredRank) maxPredRank = predRank;
+    }
+
+    const rank = maxPredRank + 1;
+    ranks.set(nodeId, rank);
+    return rank;
+  }
+
+  for (const n of nodes) {
+    computeRank(n.id, new Set());
+  }
+
+  // Force startNode to layer 0
+  if (startNode) {
+    ranks.set(startNode.id, 0);
+  }
+
+  // Group nodes by layer
+  const layers = new Map<number, FormNode[]>();
+  for (const n of nodes) {
+    const r = ranks.get(n.id) || 0;
+    if (!layers.has(r)) layers.set(r, []);
+    layers.get(r)!.push(n);
+  }
+
+  // Layout parameters
+  const X_SPACING = 340;
+  const Y_SPACING = 210;
+  const BASE_X = 80;
+  const BASE_Y = 180;
+
+  const updatedNodes: FormNode[] = [];
+  const sortedRanks = Array.from(layers.keys()).sort((a, b) => a - b);
+
+  for (const r of sortedRanks) {
+    const layerNodes = layers.get(r)!;
+    const layerCount = layerNodes.length;
+    const startY = BASE_Y - ((layerCount - 1) * Y_SPACING) / 2;
+
+    layerNodes.forEach((node, idx) => {
+      updatedNodes.push({
+        ...node,
+        position: {
+          x: BASE_X + r * X_SPACING,
+          y: Math.max(40, Math.round(startY + idx * Y_SPACING)),
+        },
+      });
+    });
+  }
+
+  return updatedNodes;
+}
+
+/**
+ * Evaluates the next step to execute, automatically resolving single and multi-rule logic gates.
  */
 export function getNextStep(
   currentStepId: string,
@@ -140,7 +250,6 @@ export function getNextStep(
   visited: Set<string> = new Set()
 ): CompiledStep | null {
   if (visited.has(currentStepId)) {
-    // Prevent infinite cycles
     return null;
   }
   visited.add(currentStepId);
@@ -150,11 +259,33 @@ export function getNextStep(
 
   // If current is logic node, evaluate immediately and traverse
   if (current.type === "logic") {
-    const isTrue = evaluateLogicCondition(
-      answers[current.targetFieldId || ""],
-      current.condition || "equals",
-      current.compareValue || ""
-    );
+    let isTrue = false;
+
+    if (current.rules && current.rules.length > 0) {
+      if (current.combinator === "OR") {
+        isTrue = current.rules.some((rule) =>
+          evaluateLogicCondition(
+            answers[rule.targetFieldId],
+            rule.condition,
+            rule.compareValue
+          )
+        );
+      } else {
+        isTrue = current.rules.every((rule) =>
+          evaluateLogicCondition(
+            answers[rule.targetFieldId],
+            rule.condition,
+            rule.compareValue
+          )
+        );
+      }
+    } else {
+      isTrue = evaluateLogicCondition(
+        answers[current.targetFieldId || ""],
+        current.condition || "equals",
+        current.compareValue || ""
+      );
+    }
 
     const nextId = isTrue
       ? current.trueNextNodeId || current.defaultNextNodeId
@@ -171,7 +302,6 @@ export function getNextStep(
   const nextStep = schema.steps[nextId];
   if (!nextStep) return null;
 
-  // If next step is a logic node, resolve it immediately
   if (nextStep.type === "logic") {
     return getNextStep(nextId, answers, schema, visited);
   }
@@ -201,10 +331,20 @@ export function evaluateLogicCondition(
       return strActual !== strTarget;
     case "contains":
       return strActual.includes(strTarget);
+    case "not_contains":
+      return !strActual.includes(strTarget);
+    case "starts_with":
+      return strActual.startsWith(strTarget);
+    case "ends_with":
+      return strActual.endsWith(strTarget);
     case "greater_than":
       return Number(actualValue) > Number(targetValue);
     case "less_than":
       return Number(actualValue) < Number(targetValue);
+    case "greater_or_equal":
+      return Number(actualValue) >= Number(targetValue);
+    case "less_or_equal":
+      return Number(actualValue) <= Number(targetValue);
     default:
       return false;
   }

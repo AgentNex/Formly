@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { FormNode, FormEdge, CompiledFormSchema } from "./types/flow";
+import { FormNode, FormEdge, CompiledFormSchema, FormSettings } from "./types/flow";
 import { compileFlow } from "./flowCompiler";
 
 export interface ProjectRecord {
@@ -13,6 +13,8 @@ export interface ProjectRecord {
   updatedAt: number;
   formId: string;
   slug: string;
+  status: "draft" | "published" | "paused" | "archived";
+  revision: number;
   isPublished: boolean;
   viewCount: number;
   submissionCount: number;
@@ -26,8 +28,11 @@ export interface FormRecord {
   title: string;
   description?: string;
   slug: string;
+  status: "draft" | "published" | "paused" | "archived";
+  revision: number;
   nodes: FormNode[];
   edges: FormEdge[];
+  settings?: FormSettings;
   compiledSchema: CompiledFormSchema;
   isPublished: boolean;
   createdAt: number;
@@ -40,11 +45,13 @@ export interface SubmissionRecord {
   slug: string;
   respondentId: string;
   answers: Record<string, unknown>;
+  branchPath?: string[];
   durationSeconds?: number;
+  status: "submitted" | "verified" | "flagged" | "archived";
   submittedAt: number;
 }
 
-const STORAGE_PREFIX = "nodeform_store_";
+const STORAGE_PREFIX = "formly_store_";
 
 function getStorage<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
@@ -60,13 +67,12 @@ function setStorage<T>(key: string, val: T): void {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(val));
-    window.dispatchEvent(new Event("nodeform_storage_update"));
+    window.dispatchEvent(new Event("formly_storage_update"));
   } catch {
     // Ignore quota errors
   }
 }
 
-// Generate random slug
 export function generateSlug(): string {
   const chars = "abcdefghjkmnpqrstuvwxyz23456789";
   let slug = "";
@@ -76,39 +82,39 @@ export function generateSlug(): string {
   return slug;
 }
 
-// Default nodes
+// Canonical enterprise starter template nodes
 export const initialDemoNodes: FormNode[] = [
   {
     id: "node_start",
     type: "startNode",
-    position: { x: 80, y: 160 },
+    position: { x: 80, y: 180 },
     data: {
-      title: "Product Feedback & Insights",
-      description: "Help us shape the future of our product with a 1-minute survey.",
-      buttonText: "Get Started",
+      title: "Enterprise Product Experience Survey",
+      description: "Help us shape the future of our platform with a 2-minute workflow feedback session.",
+      buttonText: "Start Evaluation",
     },
   },
   {
     id: "node_email",
     type: "fieldNode",
-    position: { x: 380, y: 140 },
+    position: { x: 420, y: 160 },
     data: {
       fieldId: "field_email",
       fieldType: "email",
-      label: "What is your email address?",
-      placeholder: "name@domain.com",
-      description: "We'll only use this to send you product updates.",
+      label: "Work Email Address",
+      placeholder: "name@company.com",
+      description: "We will only contact you for direct product roadmap follow-up.",
       required: true,
     },
   },
   {
     id: "node_rating",
     type: "fieldNode",
-    position: { x: 700, y: 140 },
+    position: { x: 760, y: 160 },
     data: {
       fieldId: "field_rating",
       fieldType: "rating",
-      label: "How would you rate your overall experience?",
+      label: "How would you rate your platform satisfaction?",
       description: "Rate from 1 (poor) to 5 (extraordinary).",
       required: true,
     },
@@ -116,22 +122,23 @@ export const initialDemoNodes: FormNode[] = [
   {
     id: "node_branch",
     type: "logicNode",
-    position: { x: 1020, y: 130 },
+    position: { x: 1100, y: 150 },
     data: {
-      label: "Rating Check",
+      label: "Satisfaction Filter",
       targetFieldId: "field_rating",
       condition: "greater_than",
       compareValue: "3",
+      combinator: "AND",
     },
   },
   {
     id: "node_positive_comment",
     type: "fieldNode",
-    position: { x: 1340, y: 60 },
+    position: { x: 1440, y: 70 },
     data: {
-      fieldId: "field_favorite",
+      fieldId: "field_positive",
       fieldType: "textarea",
-      label: "What feature did you enjoy the most?",
+      label: "What capability stood out most favorably?",
       placeholder: "Tell us what you liked...",
       required: false,
     },
@@ -139,22 +146,33 @@ export const initialDemoNodes: FormNode[] = [
   {
     id: "node_negative_comment",
     type: "fieldNode",
-    position: { x: 1340, y: 260 },
+    position: { x: 1440, y: 270 },
     data: {
       fieldId: "field_improvement",
       fieldType: "textarea",
-      label: "How can we make your experience better?",
-      placeholder: "Share what fell short...",
+      label: "Where did we fall short of your expectations?",
+      placeholder: "Share areas for improvement...",
+      required: false,
+    },
+  },
+  {
+    id: "node_nps",
+    type: "fieldNode",
+    position: { x: 1780, y: 160 },
+    data: {
+      fieldId: "field_nps",
+      fieldType: "nps",
+      label: "How likely are you to recommend Formly to a colleague?",
       required: false,
     },
   },
   {
     id: "node_end",
     type: "endNode",
-    position: { x: 1680, y: 160 },
+    position: { x: 2120, y: 180 },
     data: {
       title: "Thank You So Much!",
-      description: "Your responses have been recorded and will help our team directly.",
+      description: "Your responses have been securely recorded and routed to our product engineering leads.",
     },
   },
 ];
@@ -198,24 +216,28 @@ export const initialDemoEdges: FormEdge[] = [
     style: { stroke: "#71717a", strokeWidth: 2 },
   },
   {
-    id: "e_pos_end",
+    id: "e_pos_nps",
     source: "node_positive_comment",
-    target: "node_end",
+    target: "node_nps",
     animated: true,
     style: { stroke: "#e4e4e7", strokeWidth: 2 },
   },
   {
-    id: "e_neg_end",
+    id: "e_neg_nps",
     source: "node_negative_comment",
+    target: "node_nps",
+    animated: true,
+    style: { stroke: "#e4e4e7", strokeWidth: 2 },
+  },
+  {
+    id: "e_nps_end",
+    source: "node_nps",
     target: "node_end",
     animated: true,
     style: { stroke: "#e4e4e7", strokeWidth: 2 },
   },
 ];
 
-/**
- * Ensures demo project exists on first run
- */
 export function initializeDefaultStore(userId: string) {
   if (typeof window === "undefined") return;
 
@@ -229,22 +251,24 @@ export function initializeDefaultStore(userId: string) {
     const compiled = compileFlow(
       initialDemoNodes,
       initialDemoEdges,
-      "Product Feedback Survey",
-      "Help us shape the future of our product"
+      "Enterprise Product Experience Survey",
+      "Help us shape the future of our platform"
     );
 
     const demoProject: ProjectRecord = {
       id: pId,
       userId,
-      name: "Product Feedback Survey",
-      description: "Customer feedback workflow with intelligent rating branch",
+      name: "Enterprise Product Experience Survey",
+      description: "Customer feedback workflow with intelligent rating branch and NPS metric",
       createdAt: now,
       updatedAt: now,
       formId: fId,
       slug,
+      status: "published",
+      revision: 1,
       isPublished: true,
-      viewCount: 3,
-      submissionCount: 2,
+      viewCount: 12,
+      submissionCount: 8,
       conversionRate: 67,
     };
 
@@ -252,9 +276,11 @@ export function initializeDefaultStore(userId: string) {
       id: fId,
       projectId: pId,
       userId,
-      title: "Product Feedback Survey",
-      description: "Customer feedback workflow with intelligent rating branch",
+      title: "Enterprise Product Experience Survey",
+      description: "Customer feedback workflow with intelligent rating branch and NPS metric",
       slug,
+      status: "published",
+      revision: 1,
       nodes: initialDemoNodes,
       edges: initialDemoEdges,
       compiledSchema: compiled.schema,
@@ -268,26 +294,45 @@ export function initializeDefaultStore(userId: string) {
         id: "sub_1",
         formId: fId,
         slug,
-        respondentId: "resp_alex",
+        respondentId: "resp_alex@enterprise.com",
         answers: {
-          field_email: "alex@example.com",
+          field_email: "alex@enterprise.com",
           field_rating: 5,
-          field_favorite: "The node-based visual workflow editor is lightning fast.",
+          field_positive: "The DAG auto-layout and node-based conditional logic saved hours of form design.",
+          field_nps: 10,
         },
-        durationSeconds: 34,
-        submittedAt: now - 3600000,
+        durationSeconds: 42,
+        status: "verified",
+        submittedAt: now - 3600000 * 4,
       },
       {
         id: "sub_2",
         formId: fId,
         slug,
-        respondentId: "resp_jordan",
+        respondentId: "resp_jordan@startup.io",
         answers: {
           field_email: "jordan@startup.io",
           field_rating: 4,
-          field_favorite: "Monochromatic black and white theme looks exceptionally clean.",
+          field_positive: "Monochromatic black and zinc UI is sleek and exceptionally fast.",
+          field_nps: 9,
         },
-        durationSeconds: 42,
+        durationSeconds: 38,
+        status: "submitted",
+        submittedAt: now - 3600000 * 2,
+      },
+      {
+        id: "sub_3",
+        formId: fId,
+        slug,
+        respondentId: "resp_dev@company.org",
+        answers: {
+          field_email: "dev@company.org",
+          field_rating: 2,
+          field_improvement: "Would love automated webhooks and Slack notifications for incoming leads.",
+          field_nps: 7,
+        },
+        durationSeconds: 55,
+        status: "submitted",
         submittedAt: now - 1800000,
       },
     ];
@@ -299,9 +344,6 @@ export function initializeDefaultStore(userId: string) {
   }
 }
 
-/**
- * Reactive hook for project list
- */
 export function useProjects(userId: string) {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -309,34 +351,36 @@ export function useProjects(userId: string) {
   const reload = useCallback(() => {
     initializeDefaultStore(userId);
     const list = getStorage<ProjectRecord[]>("projects", []);
-    setProjects(list.filter((p) => p.userId === userId || p.userId === "usr_server_guest"));
+    setProjects(list);
     setLoading(false);
   }, [userId]);
 
   useEffect(() => {
     reload();
-    window.addEventListener("nodeform_storage_update", reload);
-    return () => window.removeEventListener("nodeform_storage_update", reload);
+    window.addEventListener("formly_storage_update", reload);
+    return () => window.removeEventListener("formly_storage_update", reload);
   }, [reload]);
 
-  const createProject = (name: string, description?: string) => {
-    const now = Date.now();
+  const createProject = (name: string, description?: string): ProjectRecord => {
     const pId = `proj_${Date.now().toString(36)}`;
     const fId = `form_${Date.now().toString(36)}`;
     const slug = generateSlug();
+    const now = Date.now();
 
     const compiled = compileFlow(initialDemoNodes, initialDemoEdges, name, description);
 
-    const newProj: ProjectRecord = {
+    const newProject: ProjectRecord = {
       id: pId,
       userId,
-      name: name.trim() || "Untitled Project",
+      name,
       description,
       createdAt: now,
       updatedAt: now,
       formId: fId,
       slug,
-      isPublished: true,
+      status: "draft",
+      revision: 1,
+      isPublished: false,
       viewCount: 0,
       submissionCount: 0,
       conversionRate: 0,
@@ -346,43 +390,45 @@ export function useProjects(userId: string) {
       id: fId,
       projectId: pId,
       userId,
-      title: name.trim() || "Untitled Project",
+      title: name,
       description,
       slug,
+      status: "draft",
+      revision: 1,
       nodes: initialDemoNodes,
       edges: initialDemoEdges,
       compiledSchema: compiled.schema,
-      isPublished: true,
+      isPublished: false,
       createdAt: now,
       updatedAt: now,
     };
 
-    const current = getStorage<ProjectRecord[]>("projects", []);
-    setStorage("projects", [newProj, ...current]);
+    const currentList = getStorage<ProjectRecord[]>("projects", []);
+    setStorage("projects", [newProject, ...currentList]);
     setStorage(`form_${fId}`, newForm);
     setStorage(`form_by_slug_${slug}`, fId);
     setStorage(`subs_${fId}`, []);
 
-    return newProj;
+    return newProject;
   };
 
-  const deleteProject = (projectId: string) => {
-    const list = getStorage<ProjectRecord[]>("projects", []);
-    const proj = list.find((p) => p.id === projectId);
+  const deleteProject = (id: string) => {
+    const currentList = getStorage<ProjectRecord[]>("projects", []);
+    const proj = currentList.find((p) => p.id === id);
     if (proj) {
       localStorage.removeItem(STORAGE_PREFIX + `form_${proj.formId}`);
       localStorage.removeItem(STORAGE_PREFIX + `form_by_slug_${proj.slug}`);
       localStorage.removeItem(STORAGE_PREFIX + `subs_${proj.formId}`);
     }
-    setStorage("projects", list.filter((p) => p.id !== projectId));
+    setStorage(
+      "projects",
+      currentList.filter((p) => p.id !== id)
+    );
   };
 
   return { projects, loading, createProject, deleteProject };
 }
 
-/**
- * Hook to retrieve and save a single form project
- */
 export function useFormProject(projectId: string, userId: string) {
   const [project, setProject] = useState<ProjectRecord | null>(null);
   const [form, setForm] = useState<FormRecord | null>(null);
@@ -403,8 +449,8 @@ export function useFormProject(projectId: string, userId: string) {
 
   useEffect(() => {
     reload();
-    window.addEventListener("nodeform_storage_update", reload);
-    return () => window.removeEventListener("nodeform_storage_update", reload);
+    window.addEventListener("formly_storage_update", reload);
+    return () => window.removeEventListener("formly_storage_update", reload);
   }, [reload]);
 
   const saveForm = async (
@@ -416,12 +462,14 @@ export function useFormProject(projectId: string, userId: string) {
     if (!form || !project) return;
     const now = Date.now();
     const compiled = JSON.parse(compiledSchemaString);
+    const nextRevision = (form.revision || 1) + 1;
 
     const updatedForm: FormRecord = {
       ...form,
       title,
       nodes,
       edges,
+      revision: nextRevision,
       compiledSchema: compiled,
       updatedAt: now,
     };
@@ -429,6 +477,7 @@ export function useFormProject(projectId: string, userId: string) {
     const updatedProject: ProjectRecord = {
       ...project,
       name: title,
+      revision: nextRevision,
       updatedAt: now,
     };
 
@@ -443,8 +492,9 @@ export function useFormProject(projectId: string, userId: string) {
 
   const togglePublish = async (isPublished: boolean) => {
     if (!form || !project) return;
-    const updatedForm = { ...form, isPublished };
-    const updatedProject = { ...project, isPublished };
+    const status = isPublished ? "published" : "paused";
+    const updatedForm = { ...form, isPublished, status };
+    const updatedProject = { ...project, isPublished, status };
     setStorage(`form_${form.id}`, updatedForm);
     const list = getStorage<ProjectRecord[]>("projects", []);
     setStorage(
@@ -456,9 +506,6 @@ export function useFormProject(projectId: string, userId: string) {
   return { project, form, loading, saveForm, togglePublish };
 }
 
-/**
- * Hook to retrieve public form by slug
- */
 export function usePublicForm(slug: string) {
   const [form, setForm] = useState<FormRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -472,7 +519,7 @@ export function usePublicForm(slug: string) {
       const f = getStorage<FormRecord | null>(`form_${fId}`, null);
       if (f && f.isPublished) {
         setForm(f);
-        // Record view count
+        // Increment view count
         const projects = getStorage<ProjectRecord[]>("projects", []);
         setStorage(
           "projects",
@@ -496,17 +543,21 @@ export function usePublicForm(slug: string) {
 
   const submitResponse = async (
     answers: Record<string, unknown>,
-    durationSeconds: number
-  ) => {
-    if (!form) return;
+    durationSeconds: number,
+    intentId: string,
+    branchPath: string[]
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!form) return { success: false, error: "Form not loaded" };
     const now = Date.now();
     const sub: SubmissionRecord = {
       id: `sub_${Date.now().toString(36)}`,
       formId: form.id,
       slug: form.slug,
-      respondentId: `resp_${Date.now().toString(36)}`,
+      respondentId: `resp_${intentId.slice(-6)}`,
       answers,
+      branchPath,
       durationSeconds,
+      status: "submitted",
       submittedAt: now,
     };
 
@@ -530,14 +581,13 @@ export function usePublicForm(slug: string) {
         return p;
       })
     );
+
+    return { success: true };
   };
 
   return { form, loading, submitResponse };
 }
 
-/**
- * Hook for form analytics
- */
 export function useFormAnalytics(formId: string) {
   const [submissions, setSubmissions] = useState<SubmissionRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -551,9 +601,15 @@ export function useFormAnalytics(formId: string) {
 
   useEffect(() => {
     reload();
-    window.addEventListener("nodeform_storage_update", reload);
-    return () => window.removeEventListener("nodeform_storage_update", reload);
+    window.addEventListener("formly_storage_update", reload);
+    return () => window.removeEventListener("formly_storage_update", reload);
   }, [reload]);
 
-  return { submissions, loading };
+  const updateSubmissionStatus = (id: string, newStatus: "submitted" | "verified" | "flagged" | "archived") => {
+    const updated = submissions.map((s) => (s.id === id ? { ...s, status: newStatus } : s));
+    setStorage(`subs_${formId}`, updated);
+    setSubmissions(updated);
+  };
+
+  return { submissions, loading, updateSubmissionStatus };
 }

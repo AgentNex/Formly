@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-const USER_ID_KEY = "nodeform_user_id";
+const USER_ID_KEY = "formly_user_id";
 
 export function getOrCreateUserId(): string {
   if (typeof window === "undefined") {

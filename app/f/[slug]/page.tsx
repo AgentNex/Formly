@@ -16,12 +16,12 @@ export default function PublicFormPage() {
     return (
       <div className="min-h-screen bg-black text-zinc-400 flex flex-col items-center justify-center gap-3">
         <Loader2 className="w-6 h-6 animate-spin text-white" />
-        <span className="text-xs font-mono">Loading form...</span>
+        <span className="text-xs font-mono">Loading workflow...</span>
       </div>
     );
   }
 
-  // If form was deleted or not found or unpublished
+  // If form was deleted, not found, or paused
   if (!form || !form.isPublished) {
     return (
       <div className="min-h-screen bg-black text-zinc-100 flex flex-col items-center justify-center p-6 text-center">
@@ -29,15 +29,15 @@ export default function PublicFormPage() {
           <FileQuestion className="w-7 h-7 text-zinc-500" />
         </div>
         <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-          Form Not Found or Inactive
+          Form Inactive or Not Found
         </h1>
         <p className="text-xs sm:text-sm text-zinc-400 max-w-sm mt-2 leading-relaxed">
-          This form link or QR code is either inactive, has been deleted by its creator,
-          or the address is misspelled.
+          This form link or QR code is either paused, not yet published,
+          or the URL address is misspelled.
         </p>
         <div className="mt-6 flex items-center gap-1.5 text-[11px] font-mono text-zinc-600">
           <ShieldCheck className="w-3.5 h-3.5 text-zinc-500" />
-          <span>NodeForm Secure Verification</span>
+          <span>Formly Secure Enterprise Verification</span>
         </div>
       </div>
     );
@@ -45,7 +45,7 @@ export default function PublicFormPage() {
 
   return (
     <div className="min-h-screen bg-black text-zinc-100 flex flex-col justify-between">
-      {/* Discreet Branding Header */}
+      {/* Discreet Formly Branding Header */}
       <header className="h-14 border-b border-zinc-900 px-6 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-white" />
@@ -54,7 +54,7 @@ export default function PublicFormPage() {
           </span>
         </div>
         <span className="text-[10px] font-mono text-zinc-600 uppercase tracking-widest">
-          Powered by NodeForm
+          Powered by Formly
         </span>
       </header>
 
@@ -63,16 +63,17 @@ export default function PublicFormPage() {
         <InteractiveFormRunner
           schema={form.compiledSchema}
           isPreview={false}
-          onSubmitResponse={async (answers, duration) => {
-            await submitResponse(answers, duration);
+          onSubmitResponse={async (answers, duration, intentId, branchPath) => {
+            const res = await submitResponse(answers, duration, intentId, branchPath);
             setSubmitted(true);
+            return res;
           }}
         />
       </main>
 
       {/* Footer */}
       <footer className="h-12 border-t border-zinc-900 px-6 flex items-center justify-center text-[11px] font-mono text-zinc-600">
-        <span>Confidential & Secure Submission</span>
+        <span>Confidential & End-to-End Encrypted Submission</span>
       </footer>
     </div>
   );

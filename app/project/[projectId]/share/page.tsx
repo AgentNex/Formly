@@ -130,7 +130,7 @@ export default function ProjectSharePage() {
               <div>
                 <h3 className="text-sm font-semibold text-white">Form Visibility</h3>
                 <p className="text-xs text-zinc-500 mt-0.5">
-                  When paused, respondents opening the link see a polite "Under Maintenance" screen.
+                  When paused, respondents opening the link see a polite &quot;Under Maintenance&quot; screen.
                 </p>
               </div>
               <button

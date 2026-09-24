@@ -3,8 +3,8 @@ import "./globals.css";
 import { ConvexClientProvider } from "./ConvexClientProvider";
 
 export const metadata: Metadata = {
-  title: "NodeForm | Interactive Node-Based Form Builder",
-  description: "Production-grade workflow form builder and real-time analytics powered by React Flow and Convex.",
+  title: "Formly | Enterprise Workflow Form Platform",
+  description: "Production-grade workflow form builder, server-authoritative DAG runtime, and real-time telemetry powered by React Flow and Convex.",
   icons: {
     icon: "/favicon.ico",
   },

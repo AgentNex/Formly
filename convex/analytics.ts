@@ -1,11 +1,15 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { requireOrgMembership } from "./auth_helpers";
 
-export const recordView = mutation({
+export const recordEvent = mutation({
   args: {
     slug: v.string(),
-    visitorId: v.string(),
-    userAgent: v.optional(v.string()),
+    sessionId: v.string(),
+    eventType: v.string(),
+    nodeId: v.optional(v.string()),
+    fieldId: v.optional(v.string()),
+    metadata: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db
@@ -13,87 +17,97 @@ export const recordView = mutation({
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
 
-    if (!form || !form.isPublished) return { recorded: false };
+    if (!form) return { success: false };
 
-    await ctx.db.insert("form_views", {
+    const now = Date.now();
+
+    // 1. Ingest event
+    await ctx.db.insert("events", {
       formId: form._id,
-      slug: args.slug,
-      visitorId: args.visitorId,
-      userAgent: args.userAgent,
-      viewedAt: Date.now(),
+      versionId: form.activeVersionId,
+      orgId: form.orgId,
+      sessionId: args.sessionId,
+      eventType: args.eventType,
+      nodeId: args.nodeId,
+      fieldId: args.fieldId,
+      metadata: args.metadata,
+      timestamp: now,
     });
 
-    return { recorded: true };
-  },
-});
-
-export const submitResponse = mutation({
-  args: {
-    slug: v.string(),
-    respondentId: v.string(),
-    answers: v.string(), // JSON stringified answers
-    durationSeconds: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const form = await ctx.db
-      .query("forms")
-      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+    // 2. Incrementally update pre-aggregated totals
+    const totalAgg = await ctx.db
+      .query("analytics_aggregates")
+      .withIndex("by_form_period", (q) => q.eq("formId", form._id).eq("period", "total"))
       .first();
 
-    if (!form || !form.isPublished) {
-      throw new Error("Form is not published or no longer available.");
+    const isView = args.eventType === "form_viewed";
+    const isStart = args.eventType === "form_started";
+
+    if (totalAgg) {
+      await ctx.db.patch(totalAgg._id, {
+        views: totalAgg.views + (isView ? 1 : 0),
+        starts: totalAgg.starts + (isStart ? 1 : 0),
+        updatedAt: now,
+      });
+    } else {
+      await ctx.db.insert("analytics_aggregates", {
+        formId: form._id,
+        versionId: form.activeVersionId,
+        period: "total",
+        views: isView ? 1 : 0,
+        starts: isStart ? 1 : 0,
+        completions: 0,
+        totalDurationSeconds: 0,
+        updatedAt: now,
+      });
     }
 
-    const subId = await ctx.db.insert("submissions", {
-      formId: form._id,
-      slug: args.slug,
-      respondentId: args.respondentId,
-      answers: args.answers,
-      durationSeconds: args.durationSeconds,
-      submittedAt: Date.now(),
-    });
-
-    return { success: true, submissionId: subId };
+    return { success: true };
   },
 });
 
 export const getStats = query({
-  args: { formId: v.id("forms") },
+  args: {
+    formId: v.id("forms"),
+    devToken: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const form = await ctx.db.get(args.formId);
     if (!form) return null;
 
-    const views = await ctx.db
-      .query("form_views")
-      .withIndex("by_form", (q) => q.eq("formId", args.formId))
-      .collect();
+    await requireOrgMembership(ctx, form.orgId, "viewer", args.devToken);
 
-    const submissions = await ctx.db
-      .query("submissions")
-      .withIndex("by_form", (q) => q.eq("formId", args.formId))
-      .order("desc")
-      .collect();
+    // 1. Fetch pre-aggregated total metrics
+    const totalAgg = await ctx.db
+      .query("analytics_aggregates")
+      .withIndex("by_form_period", (q) => q.eq("formId", args.formId).eq("period", "total"))
+      .first();
 
-    const totalViews = views.length;
-    const uniqueVisitors = new Set(views.map((v) => v.visitorId)).size;
-    const totalSubmissions = submissions.length;
+    const totalViews = totalAgg?.views || 0;
+    const totalStarts = totalAgg?.starts || 0;
+    const totalCompletions = totalAgg?.completions || 0;
+    const totalDurationSeconds = totalAgg?.totalDurationSeconds || 0;
+
     const conversionRate =
-      totalViews > 0 ? Math.round((totalSubmissions / totalViews) * 100) : 0;
-
-    // Average duration in seconds
-    const durations = submissions
-      .map((s) => s.durationSeconds)
-      .filter((d): d is number => typeof d === "number" && d > 0);
+      totalViews > 0 ? Math.round((totalCompletions / totalViews) * 100) : 0;
+    const completionRate =
+      totalStarts > 0 ? Math.round((totalCompletions / totalStarts) * 100) : 0;
     const avgDuration =
-      durations.length > 0
-        ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length)
+      totalCompletions > 0
+        ? Math.round(totalDurationSeconds / totalCompletions)
         : 0;
 
-    // Field-level answer aggregates
+    // 2. Fetch sample of recent submissions for response distributions
+    const recentSubs = await ctx.db
+      .query("submissions")
+      .withIndex("by_form_time", (q) => q.eq("formId", args.formId))
+      .order("desc")
+      .take(100);
+
     const fieldCounts: Record<string, Record<string, number>> = {};
     const fieldTextSamples: Record<string, string[]> = {};
 
-    submissions.forEach((sub) => {
+    recentSubs.forEach((sub) => {
       try {
         const parsed = JSON.parse(sub.answers);
         for (const [key, val] of Object.entries(parsed)) {
@@ -118,39 +132,54 @@ export const getStats = query({
             });
           }
         }
-      } catch (e) {
-        // Ignore unparseable
+      } catch {
+        // ignore malformed
       }
     });
 
     return {
       totalViews,
-      uniqueVisitors,
-      totalSubmissions,
+      totalStarts,
+      totalSubmissions: totalCompletions,
       conversionRate,
+      completionRate,
       avgDuration,
       fieldCounts,
       fieldTextSamples,
-      recentSubmissionsCount: submissions.slice(0, 10).length,
+      recentSubmissionsCount: recentSubs.length,
     };
   },
 });
 
-export const listSubmissions = query({
-  args: { formId: v.id("forms") },
+export const getFunnel = query({
+  args: {
+    formId: v.id("forms"),
+    devToken: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
-    const submissions = await ctx.db
-      .query("submissions")
-      .withIndex("by_form", (q) => q.eq("formId", args.formId))
-      .order("desc")
-      .take(100);
+    const form = await ctx.db.get(args.formId);
+    if (!form) return [];
 
-    return submissions.map((s) => ({
-      _id: s._id,
-      submittedAt: s.submittedAt,
-      durationSeconds: s.durationSeconds,
-      respondentId: s.respondentId,
-      answers: s.answers,
+    await requireOrgMembership(ctx, form.orgId, "viewer", args.devToken);
+
+    // Bounded query for recent step_viewed events
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_form_type", (q) =>
+        q.eq("formId", args.formId).eq("eventType", "step_viewed")
+      )
+      .take(500);
+
+    const nodeViews: Record<string, number> = {};
+    events.forEach((e) => {
+      if (e.nodeId) {
+        nodeViews[e.nodeId] = (nodeViews[e.nodeId] || 0) + 1;
+      }
+    });
+
+    return Object.entries(nodeViews).map(([nodeId, views]) => ({
+      nodeId,
+      views,
     }));
   },
 });

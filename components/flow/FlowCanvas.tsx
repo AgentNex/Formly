@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   ReactFlow,
   MiniMap,
@@ -20,17 +20,22 @@ import "@xyflow/react/dist/style.css";
 import { nodeTypes } from "./CustomNodes";
 import { ComponentPalette } from "./ComponentPalette";
 import { NodeInspector } from "./NodeInspector";
-import { FormNode, FormEdge, FieldType } from "@/lib/types/flow";
-import { compileFlow } from "@/lib/flowCompiler";
+import { FormNode, FormEdge, FieldType, FormNodeData } from "@/lib/types/flow";
+import { compileFlow, applyDagLayout } from "@/lib/flowCompiler";
 import {
   Save,
-  Play,
   RotateCcw,
   Sparkles,
   Share2,
   Check,
   AlertCircle,
   Eye,
+  Undo2,
+  Redo2,
+  Copy,
+  Layers,
+  Sliders,
+  CheckCircle2,
 } from "lucide-react";
 
 interface FlowCanvasProps {
@@ -50,6 +55,11 @@ interface FlowCanvasProps {
   onOpenShare: () => void;
 }
 
+interface HistoryEntry {
+  nodes: FormNode[];
+  edges: FormEdge[];
+}
+
 function FlowCanvasInner({
   initialNodes,
   initialEdges,
@@ -66,8 +76,60 @@ function FlowCanvasInner({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [title, setTitle] = useState(formTitle);
   const [isSaving, setIsSaving] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"clean" | "dirty" | "saving" | "conflict">("clean");
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [showValidationModal, setShowValidationModal] = useState(false);
+
+  // Mobile drawer states
+  const [mobileTab, setMobileTab] = useState<"canvas" | "palette" | "inspector">("canvas");
+
+  // Undo / Redo history stack
+  const [history, setHistory] = useState<HistoryEntry[]>([
+    { nodes: initialNodes, edges: initialEdges },
+  ]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const isUndoRedoAction = useRef(false);
+
+  // Clipboard buffer
+  const clipboardRef = useRef<FormNode | null>(null);
+
+  // Push to history when changes occur (debounced for positions)
+  const pushToHistory = useCallback((newNodes: FormNode[], newEdges: FormEdge[]) => {
+    if (isUndoRedoAction.current) {
+      isUndoRedoAction.current = false;
+      return;
+    }
+    setHistory((prev) => {
+      const trimmed = prev.slice(0, historyIndex + 1);
+      return [...trimmed, { nodes: newNodes, edges: newEdges }].slice(-30);
+    });
+    setHistoryIndex((prev) => Math.min(prev + 1, 29));
+    setSaveStatus("dirty");
+  }, [historyIndex]);
+
+  // Undo
+  const handleUndo = useCallback(() => {
+    if (historyIndex > 0) {
+      isUndoRedoAction.current = true;
+      const target = history[historyIndex - 1];
+      setNodes(target.nodes);
+      setEdges(target.edges);
+      setHistoryIndex((prev) => prev - 1);
+      setSaveStatus("dirty");
+    }
+  }, [history, historyIndex, setNodes, setEdges]);
+
+  // Redo
+  const handleRedo = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+      isUndoRedoAction.current = true;
+      const target = history[historyIndex + 1];
+      setNodes(target.nodes);
+      setEdges(target.edges);
+      setHistoryIndex((prev) => prev + 1);
+      setSaveStatus("dirty");
+    }
+  }, [history, historyIndex, setNodes, setEdges]);
 
   // Selected node object
   const selectedNode = useMemo(
@@ -84,9 +146,13 @@ function FlowCanvasInner({
         animated: true,
         style: { stroke: "#e4e4e7", strokeWidth: 2 },
       };
-      setEdges((eds) => addEdge(newEdge, eds));
+      setEdges((eds) => {
+        const nextEdges = addEdge(newEdge, eds);
+        pushToHistory(nodes, nextEdges);
+        return nextEdges;
+      });
     },
-    [setEdges]
+    [nodes, pushToHistory, setEdges]
   );
 
   // Click on node selects it
@@ -102,40 +168,42 @@ function FlowCanvasInner({
   // Update node data from inspector
   const handleUpdateNodeData = useCallback(
     (nodeId: string, updatedData: Record<string, unknown>) => {
-      setNodes((nds) =>
-        nds.map((n) => {
+      setNodes((nds) => {
+        const nextNodes = nds.map((n) => {
           if (n.id === nodeId) {
             return {
               ...n,
-              data: updatedData,
+              data: { ...n.data, ...updatedData } as FormNodeData,
             };
           }
           return n;
-        })
-      );
+        });
+        pushToHistory(nextNodes, edges);
+        return nextNodes;
+      });
     },
-    [setNodes]
+    [edges, pushToHistory, setNodes]
   );
 
   // Delete node
   const handleDeleteNode = useCallback(
     (nodeId: string) => {
-      setNodes((nds) => nds.filter((n) => n.id !== nodeId));
-      setEdges((eds) =>
-        eds.filter((e) => e.source !== nodeId && e.target !== nodeId)
-      );
+      const nextNodes = nodes.filter((n) => n.id !== nodeId);
+      const nextEdges = edges.filter((e) => e.source !== nodeId && e.target !== nodeId);
+      setNodes(nextNodes);
+      setEdges(nextEdges);
       setSelectedNodeId(null);
+      pushToHistory(nextNodes, nextEdges);
     },
-    [setNodes, setEdges]
+    [nodes, edges, pushToHistory, setNodes, setEdges]
   );
 
   // Add node from palette
   const handleAddNode = useCallback(
     (type: "fieldNode" | "logicNode" | "endNode", fieldType?: FieldType) => {
       const id = `node_${Date.now()}`;
-      // Stagger position
-      const xPos = 200 + (nodes.length % 5) * 80;
-      const yPos = 160 + (nodes.length % 5) * 60;
+      const xPos = 240 + (nodes.length % 5) * 60;
+      const yPos = 160 + (nodes.length % 5) * 50;
 
       let newNode: FormNode;
 
@@ -147,18 +215,32 @@ function FlowCanvasInner({
 
         if (fieldType === "email") {
           label = "Email Address";
-          placeholder = "you@example.com";
+          placeholder = "you@company.com";
+        } else if (fieldType === "phone") {
+          label = "Phone Number";
+          placeholder = "+1 (555) 000-0000";
         } else if (fieldType === "number") {
-          label = "Age or Quantity";
+          label = "Quantity / Amount";
           placeholder = "0";
+        } else if (fieldType === "currency") {
+          label = "Estimated Budget";
+          placeholder = "0.00";
         } else if (fieldType === "select" || fieldType === "radio" || fieldType === "checkbox") {
           label = "Choose an Option";
           options = [
-            { id: "opt_1", label: "Option A", value: "option_a" },
-            { id: "opt_2", label: "Option B", value: "option_b" },
+            { id: "opt_1", label: "Option 1", value: "option_1" },
+            { id: "opt_2", label: "Option 2", value: "option_2" },
           ];
         } else if (fieldType === "rating") {
-          label = "How would you rate our service?";
+          label = "Rating (1 to 5)";
+        } else if (fieldType === "slider") {
+          label = "Opinion Scale";
+        } else if (fieldType === "nps") {
+          label = "How likely are you to recommend us?";
+        } else if (fieldType === "signature") {
+          label = "Authorized Signature";
+        } else if (fieldType === "consent") {
+          label = "I agree to the privacy terms & conditions.";
         }
 
         newNode = {
@@ -170,9 +252,10 @@ function FlowCanvasInner({
             fieldType: fieldType || "text",
             label,
             placeholder,
-            required: true,
+            required: false,
             options,
-          },
+            currencySymbol: fieldType === "currency" ? "$" : undefined,
+          } as FormNodeData,
         };
       } else if (type === "logicNode") {
         newNode = {
@@ -180,11 +263,12 @@ function FlowCanvasInner({
           type: "logicNode",
           position: { x: xPos, y: yPos },
           data: {
-            label: "Conditional Branch",
+            label: "Branch Gate",
             targetFieldId: "",
             condition: "equals",
             compareValue: "",
-          },
+            combinator: "AND",
+          } as FormNodeData,
         };
       } else {
         newNode = {
@@ -192,183 +276,413 @@ function FlowCanvasInner({
           type: "endNode",
           position: { x: xPos, y: yPos },
           data: {
-            title: "Thank You!",
-            description: "Your responses have been successfully submitted.",
-          },
+            title: "Thank You",
+            description: "Your responses have been securely recorded.",
+          } as FormNodeData,
         };
       }
 
-      setNodes((nds) => [...nds, newNode]);
+      const nextNodes = [...nodes, newNode];
+      setNodes(nextNodes);
       setSelectedNodeId(id);
+      pushToHistory(nextNodes, edges);
     },
-    [nodes.length, setNodes]
+    [nodes, edges, pushToHistory, setNodes]
   );
 
-  // Auto-arrange layout (horizontal DAG order)
-  const handleAutoLayout = useCallback(() => {
-    setNodes((nds) => {
-      return nds.map((n, idx) => ({
-        ...n,
-        position: {
-          x: 100 + idx * 300,
-          y: 200 + (idx % 2 === 0 ? 0 : 40),
-        },
-      }));
-    });
-  }, [setNodes]);
+  // Duplicate selected node
+  const handleDuplicateSelected = useCallback(() => {
+    if (!selectedNode) return;
+    const newId = `node_${Date.now()}`;
+    const duplicated: FormNode = {
+      ...selectedNode,
+      id: newId,
+      position: {
+        x: selectedNode.position.x + 40,
+        y: selectedNode.position.y + 40,
+      },
+      data: {
+        ...selectedNode.data,
+        fieldId: (selectedNode.data as any)?.fieldId
+          ? `${(selectedNode.data as any).fieldId}_copy`
+          : undefined,
+      } as FormNodeData,
+    };
+    const nextNodes = [...nodes, duplicated];
+    setNodes(nextNodes);
+    setSelectedNodeId(newId);
+    pushToHistory(nextNodes, edges);
+  }, [selectedNode, nodes, edges, pushToHistory, setNodes]);
 
-  // Handle Save
+  // Copy & Paste keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in an input
+      if (
+        document.activeElement?.tagName === "INPUT" ||
+        document.activeElement?.tagName === "TEXTAREA" ||
+        document.activeElement?.tagName === "SELECT"
+      ) {
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+        if (e.shiftKey) {
+          e.preventDefault();
+          handleRedo();
+        } else {
+          e.preventDefault();
+          handleUndo();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "y") {
+        e.preventDefault();
+        handleRedo();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "c") {
+        if (selectedNode) {
+          clipboardRef.current = selectedNode;
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "v") {
+        if (clipboardRef.current) {
+          e.preventDefault();
+          const nodeToPaste = clipboardRef.current;
+          const newId = `node_${Date.now()}`;
+          const pasted: FormNode = {
+            ...nodeToPaste,
+            id: newId,
+            position: {
+              x: nodeToPaste.position.x + 50,
+              y: nodeToPaste.position.y + 50,
+            },
+            data: {
+              ...nodeToPaste.data,
+              fieldId: (nodeToPaste.data as any)?.fieldId
+                ? `${(nodeToPaste.data as any).fieldId}_${Math.random().toString(36).slice(2, 6)}`
+                : undefined,
+            } as FormNodeData,
+          };
+          const nextNodes = [...nodes, pasted];
+          setNodes(nextNodes);
+          setSelectedNodeId(newId);
+          pushToHistory(nextNodes, edges);
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "d") {
+        if (selectedNode) {
+          e.preventDefault();
+          handleDuplicateSelected();
+        }
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedNode && selectedNode.type !== "startNode") {
+          e.preventDefault();
+          handleDeleteNode(selectedNode.id);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedNode, handleUndo, handleRedo, handleDuplicateSelected, handleDeleteNode, nodes, edges, pushToHistory, setNodes]);
+
+  // True DAG auto-layout
+  const handleAutoLayout = useCallback(() => {
+    const layouted = applyDagLayout(nodes, edges);
+    setNodes(layouted);
+    pushToHistory(layouted, edges);
+  }, [nodes, edges, pushToHistory, setNodes]);
+
+  // Save handler
   const handleSave = async () => {
     setIsSaving(true);
-    try {
-      const compileRes = compileFlow(nodes, edges, title, formDescription);
-      setWarnings(compileRes.warnings);
+    setSaveStatus("saving");
+    const compilation = compileFlow(nodes, edges, title, formDescription);
+    setWarnings(compilation.warnings);
 
+    try {
       await onSave(
         title,
         nodes,
         edges,
-        JSON.stringify(compileRes.schema)
+        JSON.stringify(compilation.schema)
       );
-
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 2500);
-    } catch (err) {
-      console.error("Save failed:", err);
+      setSaveStatus("clean");
+    } catch {
+      setSaveStatus("dirty");
     } finally {
       setIsSaving(false);
     }
   };
 
+  // Publish action with validation gate
+  const handlePublishClick = async () => {
+    const compilation = compileFlow(nodes, edges, title, formDescription);
+    if (!compilation.isValid) {
+      setWarnings(compilation.warnings);
+      setShowValidationModal(true);
+      return;
+    }
+    if (onTogglePublish) {
+      await onTogglePublish(!isPublished);
+    }
+  };
+
   return (
-    <div className="flex flex-col h-full w-full bg-black text-white select-none">
-      {/* Top Bar */}
-      <header className="h-14 border-b border-zinc-800 bg-zinc-950 px-4 flex items-center justify-between z-10">
+    <div className="flex flex-col h-full bg-black text-white overflow-hidden select-none">
+      {/* Top Toolbar */}
+      <header className="h-14 border-b border-zinc-800 bg-zinc-950 px-4 flex items-center justify-between z-20">
         <div className="flex items-center gap-3">
           <input
             type="text"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            className="bg-transparent text-sm font-semibold text-white hover:bg-zinc-900 focus:bg-zinc-900 border border-transparent focus:border-zinc-700 rounded px-2 py-1 transition-colors outline-none max-w-xs truncate"
-            placeholder="Form Title"
+            onChange={(e) => {
+              setTitle(e.target.value);
+              setSaveStatus("dirty");
+            }}
+            placeholder="Workflow Name"
+            className="bg-transparent text-sm font-semibold text-white tracking-tight border-b border-transparent hover:border-zinc-700 focus:border-white focus:outline-none px-1 py-0.5 transition-colors"
           />
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-[11px] font-mono">
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                isPublished ? "bg-white" : "bg-zinc-500"
-              }`}
-            />
-            <span className="text-zinc-400">
-              {isPublished ? "Published" : "Draft"}
-            </span>
-          </div>
+
+          {/* Autosave Status Badge */}
+          <span
+            className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded border ${
+              saveStatus === "clean"
+                ? "bg-zinc-900 text-zinc-400 border-zinc-800"
+                : saveStatus === "saving"
+                ? "bg-zinc-800 text-zinc-200 border-zinc-700 animate-pulse"
+                : saveStatus === "conflict"
+                ? "bg-red-950/60 text-red-300 border-red-800"
+                : "bg-amber-950/40 text-amber-300 border-amber-800"
+            }`}
+          >
+            {saveStatus === "clean" && "Saved"}
+            {saveStatus === "dirty" && "Unsaved"}
+            {saveStatus === "saving" && "Saving..."}
+            {saveStatus === "conflict" && "Conflict"}
+          </span>
         </div>
 
-        {/* Warnings indicator if any */}
-        {warnings.length > 0 && (
-          <div className="hidden md:flex items-center gap-1 text-xs text-zinc-400 bg-zinc-900/90 border border-zinc-800 px-2.5 py-1 rounded-lg">
-            <AlertCircle className="w-3.5 h-3.5 text-zinc-300" />
-            <span>{warnings[0]}</span>
-          </div>
-        )}
-
-        {/* Actions */}
+        {/* Action Controls */}
         <div className="flex items-center gap-2">
+          {/* History Controls */}
+          <div className="hidden md:flex items-center border border-zinc-800 rounded-lg bg-zinc-900/60 p-0.5 mr-2">
+            <button
+              onClick={handleUndo}
+              disabled={historyIndex <= 0}
+              title="Undo (Ctrl+Z)"
+              className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={handleRedo}
+              disabled={historyIndex >= history.length - 1}
+              title="Redo (Ctrl+Y)"
+              className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <Redo2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* True DAG Auto-Layout */}
           <button
             onClick={handleAutoLayout}
-            title="Auto Align Layout"
-            className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg text-zinc-300 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 transition-colors"
+            title="Auto-organize nodes into a clean DAG layout"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-white bg-zinc-900 border border-zinc-800 hover:border-zinc-700 transition-colors"
           >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Align Flow</span>
+            <Sparkles className="w-3.5 h-3.5 text-zinc-400" />
+            <span className="hidden sm:inline">DAG Layout</span>
           </button>
 
+          {/* Live Preview Button */}
           <button
             onClick={onOpenPreview}
-            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-zinc-200 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-white bg-zinc-900 border border-zinc-800 hover:border-zinc-700 transition-colors"
           >
             <Eye className="w-3.5 h-3.5" />
-            <span>Test Preview</span>
+            <span className="hidden sm:inline">Test Preview</span>
           </button>
 
+          {/* Share & QR Hub */}
           <button
             onClick={onOpenShare}
-            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-zinc-200 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-white bg-zinc-900 border border-zinc-800 hover:border-zinc-700 transition-colors"
           >
             <Share2 className="w-3.5 h-3.5" />
-            <span>Share & QR</span>
+            <span className="hidden sm:inline">Share & QR</span>
           </button>
 
+          {/* Manual Save Button */}
           <button
             onClick={handleSave}
             disabled={isSaving}
-            className="flex items-center gap-1.5 text-xs font-semibold px-4 py-1.5 rounded-lg bg-white text-black hover:bg-zinc-200 disabled:opacity-50 transition-all shadow-sm"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-white transition-colors"
           >
-            {saveSuccess ? (
-              <>
-                <Check className="w-3.5 h-3.5" />
-                <span>Saved</span>
-              </>
-            ) : isSaving ? (
-              <span>Saving...</span>
-            ) : (
-              <>
-                <Save className="w-3.5 h-3.5" />
-                <span>Save</span>
-              </>
-            )}
+            <Save className="w-3.5 h-3.5" />
+            <span>{isSaving ? "Saving..." : "Save"}</span>
           </button>
+
+          {/* Publish / Pause Toggle */}
+          {onTogglePublish && (
+            <button
+              onClick={handlePublishClick}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                isPublished
+                  ? "bg-zinc-900 text-zinc-300 border border-zinc-800 hover:bg-zinc-800"
+                  : "bg-white text-black hover:bg-zinc-200"
+              }`}
+            >
+              {isPublished ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Published</span>
+                </>
+              ) : (
+                <span>Publish</span>
+              )}
+            </button>
+          )}
         </div>
       </header>
 
-      {/* Main Flow Canvas with Sidebars */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Left Palette */}
-        <ComponentPalette onAddNode={handleAddNode} />
+      {/* Main Canvas Area */}
+      <div className="flex-1 flex relative overflow-hidden">
+        {/* Left Component Palette */}
+        <div className="hidden md:block">
+          <ComponentPalette onAddNode={handleAddNode} />
+        </div>
 
-        {/* Center React Flow Area */}
-        <div className="flex-1 h-full relative bg-zinc-950">
+        {/* Central React Flow Canvas */}
+        <div className="flex-1 h-full w-full relative">
           <ReactFlow
             nodes={nodes}
             edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
+            onNodesChange={(changes) => {
+              onNodesChange(changes);
+              setSaveStatus("dirty");
+            }}
+            onEdgesChange={(changes) => {
+              onEdgesChange(changes);
+              setSaveStatus("dirty");
+            }}
             onConnect={onConnect}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
             nodeTypes={nodeTypes}
             fitView
-            snapToGrid
-            snapGrid={[16, 16]}
-            defaultEdgeOptions={{
-              animated: true,
-              style: { stroke: "#e4e4e7", strokeWidth: 2 },
-            }}
+            attributionPosition="bottom-left"
+            className="bg-black"
           >
             <Background
               variant={BackgroundVariant.Dots}
+              gap={20}
+              size={1}
               color="#27272a"
-              gap={18}
-              size={1.5}
             />
-            <Controls className="!bg-zinc-900 !border-zinc-800 !text-white [&>button]:!border-zinc-800 [&>button]:!bg-zinc-900 [&>button]:!fill-white [&>button:hover]:!bg-zinc-800" />
+            <Controls className="!bg-zinc-950 !border-zinc-800 !text-white [&>button]:!bg-zinc-900 [&>button]:!border-zinc-800 [&>button]:!text-zinc-300" />
             <MiniMap
-              className="!bg-zinc-950 !border-zinc-800 rounded-lg overflow-hidden"
-              nodeColor="#3f3f46"
-              maskColor="rgba(0, 0, 0, 0.75)"
+              nodeColor={() => "#3f3f46"}
+              maskColor="rgba(0, 0, 0, 0.8)"
+              className="!bg-zinc-950 !border-zinc-800"
             />
           </ReactFlow>
+
+          {/* Floating Mobile Dock */}
+          <div className="md:hidden absolute bottom-4 left-1/2 -translate-x-1/2 bg-zinc-950/90 backdrop-blur border border-zinc-800 rounded-full px-4 py-2 flex items-center gap-3 z-30 shadow-2xl">
+            <button
+              onClick={() => setMobileTab(mobileTab === "palette" ? "canvas" : "palette")}
+              className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1 rounded-full ${
+                mobileTab === "palette" ? "bg-white text-black" : "text-zinc-300"
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Palette</span>
+            </button>
+            <button
+              onClick={() => setMobileTab(mobileTab === "inspector" ? "canvas" : "inspector")}
+              className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1 rounded-full ${
+                mobileTab === "inspector" ? "bg-white text-black" : "text-zinc-300"
+              }`}
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Inspector</span>
+            </button>
+          </div>
+
+          {/* Mobile Palette Overlay */}
+          {mobileTab === "palette" && (
+            <div className="md:hidden absolute inset-0 bg-black/80 backdrop-blur z-40 flex flex-col">
+              <div className="flex-1 max-w-sm w-full bg-zinc-950 border-r border-zinc-800">
+                <ComponentPalette
+                  onAddNode={(type, fieldType) => {
+                    handleAddNode(type, fieldType);
+                    setMobileTab("canvas");
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Mobile Inspector Overlay */}
+          {mobileTab === "inspector" && (
+            <div className="md:hidden absolute inset-0 bg-black/80 backdrop-blur z-40 flex justify-end">
+              <div className="max-w-sm w-full bg-zinc-950 border-l border-zinc-800">
+                <NodeInspector
+                  selectedNode={selectedNode}
+                  allNodes={nodes}
+                  onUpdateNodeData={handleUpdateNodeData}
+                  onDeleteNode={(id) => {
+                    handleDeleteNode(id);
+                    setMobileTab("canvas");
+                  }}
+                  onClose={() => setMobileTab("canvas")}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Right Inspector */}
-        <NodeInspector
-          selectedNode={selectedNode}
-          allNodes={nodes}
-          onUpdateNodeData={handleUpdateNodeData}
-          onDeleteNode={handleDeleteNode}
-          onClose={() => setSelectedNodeId(null)}
-        />
+        {/* Desktop Right Node Inspector */}
+        <div className="hidden md:block">
+          <NodeInspector
+            selectedNode={selectedNode}
+            allNodes={nodes}
+            onUpdateNodeData={handleUpdateNodeData}
+            onDeleteNode={handleDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        </div>
       </div>
+
+      {/* Validation Gate Dialog */}
+      {showValidationModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3 text-amber-400">
+              <AlertCircle className="w-5 h-5 flex-shrink-0" />
+              <h3 className="text-sm font-semibold text-white">Validation Warnings</h3>
+            </div>
+            <p className="text-xs text-zinc-400">
+              The workflow canvas has structural issues that should be addressed before publishing:
+            </p>
+            <ul className="space-y-2 max-h-48 overflow-y-auto">
+              {warnings.map((w, idx) => (
+                <li
+                  key={idx}
+                  className="text-xs bg-zinc-900 border border-zinc-800/80 rounded-lg p-2.5 text-zinc-300"
+                >
+                  {w}
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setShowValidationModal(false)}
+                className="px-4 py-1.5 rounded-lg text-xs font-medium bg-white text-black hover:bg-zinc-200 transition-colors"
+              >
+                Close & Fix
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

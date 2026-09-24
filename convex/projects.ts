@@ -1,16 +1,18 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { getViewer, requireOrgMembership } from "./auth_helpers";
+import { Doc, Id } from "./_generated/dataModel";
 
-// Default start and end nodes for fresh forms
-const defaultNodes = [
+// Canonical starter template nodes
+const defaultStarterNodes = [
   {
     id: "node_start",
     type: "startNode",
     position: { x: 100, y: 180 },
     data: {
-      title: "Welcome to Our Form",
-      description: "Please fill out the following questions.",
-      buttonText: "Start",
+      title: "Customer Insights & Feedback",
+      description: "Please take a moment to share your valuable thoughts with us.",
+      buttonText: "Start Survey",
     },
   },
   {
@@ -20,23 +22,59 @@ const defaultNodes = [
     data: {
       fieldId: "field_email",
       fieldType: "email",
-      label: "Email Address",
-      placeholder: "name@example.com",
-      description: "We will only use this to follow up with you.",
+      label: "Work Email Address",
+      placeholder: "name@company.com",
+      description: "We will only reach out if you request follow-up assistance.",
       required: true,
       options: [],
     },
   },
   {
-    id: "node_feedback",
+    id: "node_rating",
     type: "fieldNode",
     position: { x: 740, y: 160 },
     data: {
-      fieldId: "field_feedback",
+      fieldId: "field_rating",
+      fieldType: "rating",
+      label: "Overall Product Satisfaction",
+      description: "How satisfied are you with our enterprise platform?",
+      required: true,
+      options: [],
+    },
+  },
+  {
+    id: "node_branch",
+    type: "logicNode",
+    position: { x: 1060, y: 150 },
+    data: {
+      label: "Satisfaction Branch",
+      targetFieldId: "field_rating",
+      condition: "greater_than",
+      compareValue: "3",
+    },
+  },
+  {
+    id: "node_positive_feedback",
+    type: "fieldNode",
+    position: { x: 1380, y: 70 },
+    data: {
+      fieldId: "field_positive_detail",
       fieldType: "textarea",
-      label: "Your Feedback",
-      placeholder: "Tell us about your experience...",
-      description: "Any details you'd like to share.",
+      label: "What features impressed you most?",
+      placeholder: "Tell us what you liked...",
+      required: false,
+      options: [],
+    },
+  },
+  {
+    id: "node_negative_feedback",
+    type: "fieldNode",
+    position: { x: 1380, y: 270 },
+    data: {
+      fieldId: "field_negative_detail",
+      fieldType: "textarea",
+      label: "Where can we improve your experience?",
+      placeholder: "Let us know how we can do better...",
       required: false,
       options: [],
     },
@@ -44,15 +82,15 @@ const defaultNodes = [
   {
     id: "node_end",
     type: "endNode",
-    position: { x: 1060, y: 180 },
+    position: { x: 1720, y: 180 },
     data: {
       title: "Thank You!",
-      description: "Your response has been submitted successfully.",
+      description: "Your responses have been securely captured and routed to our team.",
     },
   },
 ];
 
-const defaultEdges = [
+const defaultStarterEdges = [
   {
     id: "e_start_email",
     source: "node_start",
@@ -61,15 +99,45 @@ const defaultEdges = [
     style: { stroke: "#e4e4e7", strokeWidth: 2 },
   },
   {
-    id: "e_email_feedback",
+    id: "e_email_rating",
     source: "node_email",
-    target: "node_feedback",
+    target: "node_rating",
     animated: true,
     style: { stroke: "#e4e4e7", strokeWidth: 2 },
   },
   {
-    id: "e_feedback_end",
-    source: "node_feedback",
+    id: "e_rating_branch",
+    source: "node_rating",
+    target: "node_branch",
+    animated: true,
+    style: { stroke: "#e4e4e7", strokeWidth: 2 },
+  },
+  {
+    id: "e_branch_true",
+    source: "node_branch",
+    sourceHandle: "true",
+    target: "node_positive_feedback",
+    animated: true,
+    style: { stroke: "#10b981", strokeWidth: 2 },
+  },
+  {
+    id: "e_branch_false",
+    source: "node_branch",
+    sourceHandle: "false",
+    target: "node_negative_feedback",
+    animated: true,
+    style: { stroke: "#71717a", strokeWidth: 2 },
+  },
+  {
+    id: "e_pos_end",
+    source: "node_positive_feedback",
+    target: "node_end",
+    animated: true,
+    style: { stroke: "#e4e4e7", strokeWidth: 2 },
+  },
+  {
+    id: "e_neg_end",
+    source: "node_negative_feedback",
     target: "node_end",
     animated: true,
     style: { stroke: "#e4e4e7", strokeWidth: 2 },
@@ -86,160 +154,279 @@ function generateSlug(): string {
 }
 
 export const list = query({
-  args: { userId: v.string() },
+  args: {
+    orgId: v.optional(v.id("organizations")),
+    devToken: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
+    const user = await getViewer(ctx, args.devToken);
+    if (!user) return [];
+
+    let targetOrgId = args.orgId;
+    if (!targetOrgId) {
+      // Find primary organization membership
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .first();
+
+      if (membership) {
+        targetOrgId = membership.orgId;
+      } else {
+        const ownedOrg = await ctx.db
+          .query("organizations")
+          .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
+          .first();
+        if (ownedOrg) targetOrgId = ownedOrg._id;
+      }
+    }
+
+    if (!targetOrgId) return [];
+
     const projects = await ctx.db
       .query("projects")
-      .withIndex("by_user_updated", (q) => q.eq("userId", args.userId))
+      .withIndex("by_org_updated", (q) => q.eq("orgId", targetOrgId!))
       .order("desc")
       .collect();
 
-    // Attach form counts and primary form info
-    const enriched = await Promise.all(
-      projects.map(async (project) => {
-        const forms = await ctx.db
+    const activeProjects = projects.filter((p) => p.status !== "deleted");
+
+    // Enrich with primary form details and pre-aggregated analytics
+    return await Promise.all(
+      activeProjects.map(async (project) => {
+        const form = await ctx.db
           .query("forms")
           .withIndex("by_project", (q) => q.eq("projectId", project._id))
-          .collect();
+          .first();
 
-        const form = forms[0] || null;
         let viewCount = 0;
         let submissionCount = 0;
 
         if (form) {
-          const views = await ctx.db
-            .query("form_views")
-            .withIndex("by_form", (q) => q.eq("formId", form._id))
-            .collect();
-          viewCount = views.length;
+          const totalAgg = await ctx.db
+            .query("analytics_aggregates")
+            .withIndex("by_form_period", (q) => q.eq("formId", form._id).eq("period", "total"))
+            .first();
 
-          const submissions = await ctx.db
-            .query("submissions")
-            .withIndex("by_form", (q) => q.eq("formId", form._id))
-            .collect();
-          submissionCount = submissions.length;
+          if (totalAgg) {
+            viewCount = totalAgg.views;
+            submissionCount = totalAgg.completions;
+          } else {
+            // Count from submissions table
+            const subs = await ctx.db
+              .query("submissions")
+              .withIndex("by_form", (q) => q.eq("formId", form._id))
+              .collect();
+            submissionCount = subs.length;
+          }
         }
 
         return {
-          ...project,
+          _id: project._id,
+          orgId: project.orgId,
+          name: project.name,
+          description: project.description,
+          status: project.status,
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt,
           formId: form?._id || null,
           slug: form?.slug || null,
-          isPublished: form?.isPublished ?? false,
+          formStatus: form?.status || "draft",
+          revision: form?.revision || 1,
+          isPublished: form?.status === "published",
           viewCount,
           submissionCount,
           conversionRate:
-            viewCount > 0
-              ? Math.round((submissionCount / viewCount) * 100)
-              : 0,
+            viewCount > 0 ? Math.round((submissionCount / viewCount) * 100) : 0,
         };
       })
     );
-
-    return enriched;
   },
 });
 
 export const get = query({
   args: {
     projectId: v.id("projects"),
-    userId: v.string(),
+    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
-    if (!project || project.userId !== args.userId) {
-      return null;
-    }
+    if (!project || project.status === "deleted") return null;
 
-    const forms = await ctx.db
+    await requireOrgMembership(ctx, project.orgId, "viewer", args.devToken);
+
+    const form = await ctx.db
       .query("forms")
       .withIndex("by_project", (q) => q.eq("projectId", project._id))
-      .collect();
+      .first();
 
     return {
-      ...project,
-      forms,
-      primaryForm: forms[0] || null,
+      project,
+      form,
     };
   },
 });
 
 export const create = mutation({
   args: {
-    userId: v.string(),
     name: v.string(),
     description: v.optional(v.string()),
-    template: v.optional(v.string()),
+    orgId: v.optional(v.id("organizations")),
+    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const user = await getViewer(ctx, args.devToken);
+    if (!user) throw new Error("Unauthorized");
+
+    let targetOrgId = args.orgId;
+    if (!targetOrgId) {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .first();
+      if (membership) {
+        targetOrgId = membership.orgId;
+      } else {
+        const ownedOrg = await ctx.db
+          .query("organizations")
+          .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
+          .first();
+        if (ownedOrg) targetOrgId = ownedOrg._id;
+      }
+    }
+
+    if (!targetOrgId) throw new Error("No organization found for user.");
+
+    await requireOrgMembership(ctx, targetOrgId, "editor", args.devToken);
+
     const now = Date.now();
+    const slug = generateSlug();
+
+    // 1. Create project
     const projectId = await ctx.db.insert("projects", {
-      userId: args.userId,
-      name: args.name.trim() || "Untitled Project",
-      description: args.description?.trim(),
+      orgId: targetOrgId,
+      name: args.name.trim() || "Untitled Workflow",
+      description: args.description,
+      createdBy: user._id,
+      status: "active",
       createdAt: now,
       updatedAt: now,
     });
 
-    const slug = generateSlug();
+    // 2. Create primary form with initial starter nodes
     const formId = await ctx.db.insert("forms", {
       projectId,
-      userId: args.userId,
-      title: args.name.trim() || "Untitled Form",
-      description: args.description?.trim(),
+      orgId: targetOrgId,
+      title: args.name.trim() || "Untitled Workflow",
+      description: args.description,
       slug,
-      nodes: JSON.stringify(defaultNodes),
-      edges: JSON.stringify(defaultEdges),
-      compiledSchema: JSON.stringify({
-        title: args.name,
-        steps: defaultNodes,
+      status: "draft",
+      revision: 1,
+      nodes: JSON.stringify(defaultStarterNodes),
+      edges: JSON.stringify(defaultStarterEdges),
+      settings: JSON.stringify({
+        submitButtonText: "Submit",
+        showProgressBar: true,
+        allowRestart: true,
       }),
-      isPublished: true,
+      updatedBy: user._id,
       createdAt: now,
       updatedAt: now,
+    });
+
+    // 3. Initialize analytics aggregate
+    await ctx.db.insert("analytics_aggregates", {
+      formId,
+      period: "total",
+      views: 0,
+      starts: 0,
+      completions: 0,
+      totalDurationSeconds: 0,
+      updatedAt: now,
+    });
+
+    // 4. Record audit log
+    await ctx.db.insert("audit_logs", {
+      orgId: targetOrgId,
+      actorId: user._id,
+      actorEmail: user.email,
+      action: "project.created",
+      resourceType: "project",
+      resourceId: projectId,
+      metadata: JSON.stringify({ name: args.name, formId, slug }),
+      timestamp: now,
     });
 
     return { projectId, formId, slug };
   },
 });
 
-export const remove = mutation({
+export const update = mutation({
   args: {
     projectId: v.id("projects"),
-    userId: v.string(),
+    name: v.string(),
+    description: v.optional(v.string()),
+    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
-    if (!project || project.userId !== args.userId) {
-      throw new Error("Project not found or unauthorized");
-    }
+    if (!project) throw new Error("Project not found");
 
-    // Find and delete all forms and their views and submissions
-    const forms = await ctx.db
+    const { user } = await requireOrgMembership(ctx, project.orgId, "editor", args.devToken);
+    const now = Date.now();
+
+    await ctx.db.patch(args.projectId, {
+      name: args.name.trim(),
+      description: args.description,
+      updatedAt: now,
+    });
+
+    // Sync with primary form title
+    const form = await ctx.db
       .query("forms")
-      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-      .collect();
+      .withIndex("by_project", (q) => q.eq("projectId", project._id))
+      .first();
 
-    for (const form of forms) {
-      const views = await ctx.db
-        .query("form_views")
-        .withIndex("by_form", (q) => q.eq("formId", form._id))
-        .collect();
-      for (const view of views) {
-        await ctx.db.delete(view._id);
-      }
-
-      const subs = await ctx.db
-        .query("submissions")
-        .withIndex("by_form", (q) => q.eq("formId", form._id))
-        .collect();
-      for (const sub of subs) {
-        await ctx.db.delete(sub._id);
-      }
-
-      await ctx.db.delete(form._id);
+    if (form) {
+      await ctx.db.patch(form._id, {
+        title: args.name.trim(),
+        description: args.description,
+        updatedAt: now,
+        updatedBy: user._id,
+      });
     }
 
-    await ctx.db.delete(args.projectId);
+    return { success: true };
+  },
+});
+
+export const archive = mutation({
+  args: {
+    projectId: v.id("projects"),
+    devToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (!project) throw new Error("Project not found");
+
+    const { user } = await requireOrgMembership(ctx, project.orgId, "admin", args.devToken);
+    const now = Date.now();
+
+    await ctx.db.patch(args.projectId, {
+      status: "archived",
+      updatedAt: now,
+    });
+
+    await ctx.db.insert("audit_logs", {
+      orgId: project.orgId,
+      actorId: user._id,
+      actorEmail: user.email,
+      action: "project.archived",
+      resourceType: "project",
+      resourceId: project._id,
+      timestamp: now,
+    });
+
     return { success: true };
   },
 });

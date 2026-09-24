@@ -14,7 +14,19 @@ import {
   Calendar,
   GitFork,
   CheckCircle2,
-  Check,
+  Phone,
+  SlidersHorizontal,
+  Clock,
+  UploadCloud,
+  PenTool,
+  DollarSign,
+  MapPin,
+  Globe,
+  ShieldCheck,
+  EyeOff,
+  Calculator,
+  Smile,
+  Grid,
 } from "lucide-react";
 import { FieldNodeData, LogicNodeData, StartNodeData, EndNodeData } from "@/lib/types/flow";
 
@@ -25,8 +37,12 @@ export function getFieldIcon(type?: string) {
       return <AlignLeft className="w-3.5 h-3.5" />;
     case "email":
       return <Mail className="w-3.5 h-3.5" />;
+    case "phone":
+      return <Phone className="w-3.5 h-3.5" />;
     case "number":
       return <Hash className="w-3.5 h-3.5" />;
+    case "slider":
+      return <SlidersHorizontal className="w-3.5 h-3.5" />;
     case "select":
     case "radio":
       return <ListFilter className="w-3.5 h-3.5" />;
@@ -36,6 +52,28 @@ export function getFieldIcon(type?: string) {
       return <Star className="w-3.5 h-3.5" />;
     case "date":
       return <Calendar className="w-3.5 h-3.5" />;
+    case "time":
+      return <Clock className="w-3.5 h-3.5" />;
+    case "file":
+      return <UploadCloud className="w-3.5 h-3.5" />;
+    case "signature":
+      return <PenTool className="w-3.5 h-3.5" />;
+    case "currency":
+      return <DollarSign className="w-3.5 h-3.5" />;
+    case "address":
+      return <MapPin className="w-3.5 h-3.5" />;
+    case "country":
+      return <Globe className="w-3.5 h-3.5" />;
+    case "consent":
+      return <ShieldCheck className="w-3.5 h-3.5" />;
+    case "hidden":
+      return <EyeOff className="w-3.5 h-3.5" />;
+    case "computed":
+      return <Calculator className="w-3.5 h-3.5" />;
+    case "nps":
+      return <Smile className="w-3.5 h-3.5" />;
+    case "matrix":
+      return <Grid className="w-3.5 h-3.5" />;
     case "text":
     default:
       return <Type className="w-3.5 h-3.5" />;
@@ -86,7 +124,6 @@ export const FieldNode = memo(({ data, selected }: NodeProps) => {
         selected ? "border-white ring-1 ring-white/30" : "border-zinc-800 hover:border-zinc-700"
       }`}
     >
-      {/* Input Handle */}
       <Handle
         type="target"
         position={Position.Left}
@@ -121,12 +158,10 @@ export const FieldNode = memo(({ data, selected }: NodeProps) => {
           )}
         </div>
 
-        {/* Mini Preview Box */}
         <div className="bg-zinc-900 border border-zinc-800/80 rounded-lg px-2.5 py-1.5 text-xs text-zinc-500 font-mono truncate">
           {nodeData.placeholder || "User input preview..."}
         </div>
 
-        {/* Options preview if select/radio/checkbox */}
         {nodeData.options && nodeData.options.length > 0 && (
           <div className="flex flex-wrap gap-1 pt-1">
             {nodeData.options.slice(0, 3).map((opt, i) => (
@@ -138,7 +173,7 @@ export const FieldNode = memo(({ data, selected }: NodeProps) => {
               </span>
             ))}
             {nodeData.options.length > 3 && (
-              <span className="text-[10px] text-zinc-500 self-center">
+              <span className="text-[10px] text-zinc-500 font-mono self-center">
                 +{nodeData.options.length - 3} more
               </span>
             )}
@@ -146,7 +181,6 @@ export const FieldNode = memo(({ data, selected }: NodeProps) => {
         )}
       </div>
 
-      {/* Output Handle */}
       <Handle
         type="source"
         position={Position.Right}
@@ -157,9 +191,11 @@ export const FieldNode = memo(({ data, selected }: NodeProps) => {
 });
 FieldNode.displayName = "FieldNode";
 
-// 3. Logic Branch Node Component
+// 3. Logic Node Component
 export const LogicNode = memo(({ data, selected }: NodeProps) => {
   const nodeData = data as unknown as LogicNodeData;
+  const isMultiRule = nodeData.rules && nodeData.rules.length > 0;
+
   return (
     <div
       className={`min-w-[260px] max-w-[300px] bg-zinc-950 rounded-xl border transition-all duration-200 shadow-xl ${
@@ -176,43 +212,49 @@ export const LogicNode = memo(({ data, selected }: NodeProps) => {
         <div className="p-1 rounded bg-zinc-800 text-zinc-200">
           <GitFork className="w-3.5 h-3.5" />
         </div>
-        <span className="text-xs font-semibold tracking-wide text-zinc-200">Logic Branch</span>
+        <span className="text-xs font-semibold text-zinc-200 tracking-wide">
+          {nodeData.label || "Logic Gate"}
+        </span>
       </div>
 
-      <div className="p-3.5 space-y-1.5 text-xs">
-        <div className="text-zinc-400 font-mono text-[11px]">
-          If <span className="text-white font-semibold">{nodeData.targetFieldId || "[field]"}</span>
+      <div className="p-3.5 space-y-2">
+        <div className="text-xs text-zinc-400 font-mono bg-zinc-900/90 border border-zinc-800 rounded-lg p-2 space-y-1">
+          {isMultiRule ? (
+            <div>
+              <span className="text-zinc-500 font-bold mr-1">{nodeData.combinator || "AND"}</span>
+              <span>{nodeData.rules!.length} condition(s)</span>
+            </div>
+          ) : (
+            <div>
+              <span className="text-zinc-500">IF </span>
+              <span className="text-zinc-200 font-semibold">{nodeData.targetFieldId || "..."}</span>
+              <span className="text-zinc-400"> {nodeData.condition || "equals"} </span>
+              <span className="text-white font-semibold">&quot;{nodeData.compareValue ?? ""}&quot;</span>
+            </div>
+          )}
         </div>
-        <div className="text-zinc-300">
-          {nodeData.condition} <span className="text-white font-semibold">"{nodeData.compareValue}"</span>
+
+        <div className="flex items-center justify-between text-[11px] font-mono pt-1 text-zinc-400">
+          <span className="text-emerald-400 font-medium">True</span>
+          <span className="text-zinc-400">Else</span>
         </div>
       </div>
 
-      {/* Two explicit output handles: True (top right) and False (bottom right) */}
-      <div className="relative flex flex-col justify-between py-2 border-t border-zinc-800/80 bg-zinc-900/30 px-3.5 text-[11px] font-mono">
-        <div className="flex items-center justify-between py-1">
-          <span className="text-emerald-400 flex items-center gap-1 font-medium">
-            <Check className="w-3 h-3" /> If True
-          </span>
-          <Handle
-            id="true"
-            type="source"
-            position={Position.Right}
-            style={{ top: "30%" }}
-            className="!w-3 !h-3 !bg-emerald-400 !border-2 !border-zinc-950 !rounded-full"
-          />
-        </div>
-        <div className="flex items-center justify-between py-1">
-          <span className="text-zinc-400 font-medium">Else / Fallback</span>
-          <Handle
-            id="false"
-            type="source"
-            position={Position.Right}
-            style={{ top: "72%" }}
-            className="!w-3 !h-3 !bg-zinc-500 !border-2 !border-zinc-950 !rounded-full"
-          />
-        </div>
-      </div>
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="true"
+        style={{ top: "35%" }}
+        className="!w-3 !h-3 !bg-emerald-500 !border-2 !border-zinc-950 !rounded-full transition-transform hover:scale-125"
+      />
+
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="false"
+        style={{ top: "70%" }}
+        className="!w-3 !h-3 !bg-zinc-500 !border-2 !border-zinc-950 !rounded-full transition-transform hover:scale-125"
+      />
     </div>
   );
 });
@@ -234,19 +276,24 @@ export const EndNode = memo(({ data, selected }: NodeProps) => {
       />
 
       <div className="flex items-center gap-2 px-3.5 py-2.5 border-b border-zinc-800/80 bg-zinc-900/60 rounded-t-xl">
-        <div className="w-5 h-5 rounded-md bg-white text-black flex items-center justify-center">
-          <CheckCircle2 className="w-3.5 h-3.5 text-black" />
+        <div className="p-1 rounded bg-zinc-800 text-zinc-200">
+          <CheckCircle2 className="w-3.5 h-3.5" />
         </div>
-        <span className="text-xs font-semibold tracking-wide text-zinc-200">Completion Screen</span>
+        <span className="text-xs font-semibold tracking-wide text-zinc-200">Completion</span>
       </div>
 
       <div className="p-3.5">
         <h4 className="text-sm font-semibold text-white tracking-tight line-clamp-1">
-          {nodeData.title || "Thank You!"}
+          {nodeData.title || "Thank You"}
         </h4>
         <p className="text-xs text-zinc-400 mt-1 line-clamp-2 leading-relaxed">
-          {nodeData.description || "Response successfully submitted."}
+          {nodeData.description || "Submission complete."}
         </p>
+        {nodeData.redirectUrl && (
+          <p className="text-[10px] text-zinc-500 font-mono truncate mt-2">
+            Redirect: {nodeData.redirectUrl}
+          </p>
+        )}
       </div>
     </div>
   );
