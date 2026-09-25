@@ -4,6 +4,10 @@ import {
   nextjsMiddlewareRedirect,
 } from "@convex-dev/auth/nextjs/server";
 
+if (!process.env.NEXT_PUBLIC_CONVEX_URL) {
+  process.env.NEXT_PUBLIC_CONVEX_URL = "https://formly-enterprise.convex.cloud";
+}
+
 const isAuthPage = createRouteMatcher([
   "/signin(.*)",
   "/signup(.*)",

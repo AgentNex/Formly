@@ -3,6 +3,10 @@ import "./globals.css";
 import { ConvexClientProvider } from "./ConvexClientProvider";
 import { ConvexAuthNextjsServerProvider } from "@convex-dev/auth/nextjs/server";
 
+if (!process.env.NEXT_PUBLIC_CONVEX_URL) {
+  process.env.NEXT_PUBLIC_CONVEX_URL = "https://formly-enterprise.convex.cloud";
+}
+
 export const metadata: Metadata = {
   title: "Formly | Enterprise Workflow Form Platform",
   description: "Production-grade workflow form builder, server-authoritative DAG runtime, and real-time telemetry powered by React Flow and Convex.",
