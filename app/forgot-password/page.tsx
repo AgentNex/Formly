@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useAuthActions } from "@convex-dev/auth/react";
+import { insforge } from "@/lib/insforge";
 import {
   Workflow,
   ArrowRight,
@@ -20,7 +20,6 @@ import {
 
 export default function ForgotPasswordPage() {
   const router = useRouter();
-  const { signIn } = useAuthActions();
 
   const [step, setStep] = useState<"request" | "verify">("request");
   const [email, setEmail] = useState("");
@@ -42,15 +41,13 @@ export default function ForgotPasswordPage() {
     setErrorMessage(null);
 
     try {
-      await signIn("password", {
+      await insforge.auth.sendResetPasswordEmail({
         email: email.trim().toLowerCase(),
-        flow: "reset",
       });
-      setSuccessMessage("A verification reset code has been sent to your email.");
+      setSuccessMessage("If an account exists with this email, a reset code was dispatched.");
       setStep("verify");
     } catch (err: any) {
       console.error("Password reset request error:", err);
-      // In production security, we avoid leaking user existence, but advance to code entry
       setSuccessMessage("If an account exists with this email, a reset code was dispatched.");
       setStep("verify");
     } finally {
@@ -69,15 +66,17 @@ export default function ForgotPasswordPage() {
     setErrorMessage(null);
 
     try {
-      await signIn("password", {
-        email: email.trim().toLowerCase(),
-        code: code.trim(),
+      const res = await insforge.auth.resetPassword({
         newPassword,
-        flow: "reset-verification",
+        otp: code.trim(),
       });
-      setSuccessMessage("Password successfully updated! Redirecting to workspace...");
+      if (res.error) {
+        setErrorMessage(res.error.message || "Invalid or expired reset code.");
+        return;
+      }
+      setSuccessMessage("Password successfully updated! Redirecting to sign in...");
       setTimeout(() => {
-        router.replace("/");
+        router.replace("/signin");
       }, 1500);
     } catch (err: any) {
       console.error("Password reset verification error:", err);

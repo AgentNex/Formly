@@ -3,7 +3,6 @@
 import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useAuthActions } from "@convex-dev/auth/react";
 import { useAuth } from "@/lib/auth";
 import {
   Workflow,
@@ -22,8 +21,12 @@ function SignInContent() {
   const searchParams = useSearchParams();
   const redirectPath = searchParams.get("redirect") || "/";
 
-  const { signIn } = useAuthActions();
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const {
+    signInWithPassword,
+    signInWithOAuth,
+    isAuthenticated,
+    isLoading: isAuthLoading,
+  } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -52,23 +55,28 @@ function SignInContent() {
     setErrorMessage(null);
 
     try {
-      await signIn("password", {
-        email: email.trim().toLowerCase(),
-        password,
-        flow: "signIn",
-      });
-      // Auth success; router replacement will trigger on state change
+      const res = await signInWithPassword(email.trim().toLowerCase(), password);
+      if (res.error) {
+        const msg = res.error.message || "";
+        if (
+          msg.includes("Invalid credentials") ||
+          msg.includes("password") ||
+          msg.includes("not found")
+        ) {
+          setErrorMessage("Invalid email or password. Please verify and try again.");
+        } else if (msg.includes("verify") || msg.includes("verification")) {
+          setErrorMessage("Please verify your email address before signing in.");
+        } else {
+          setErrorMessage(msg || "Authentication failed. Please check your credentials.");
+        }
+        return;
+      }
       router.replace(redirectPath);
     } catch (err: any) {
       console.error("Sign in failed:", err);
-      const msg = err?.message || "";
-      if (msg.includes("InvalidAccountId") || msg.includes("InvalidSecret") || msg.includes("credentials")) {
-        setErrorMessage("Invalid email or password. Please verify and try again.");
-      } else if (msg.includes("UserNotFound")) {
-        setErrorMessage("No account exists with this email. Would you like to sign up?");
-      } else {
-        setErrorMessage("Authentication failed. Please check your credentials.");
-      }
+      setErrorMessage(
+        err?.message || "Authentication failed. Please check your credentials."
+      );
     } finally {
       setLoading(false);
     }
@@ -80,13 +88,17 @@ function SignInContent() {
     setOauthNotice(null);
 
     try {
-      await signIn("google", {
-        redirectTo: redirectPath,
+      const targetUrl =
+        typeof window !== "undefined"
+          ? `${window.location.origin}${redirectPath}`
+          : redirectPath;
+      await signInWithOAuth("google", {
+        redirectTo: targetUrl,
       });
     } catch (err: any) {
       console.error("Google sign in error:", err);
-      setOauthNotice(
-        "Google OAuth is currently unconfigured or requires client credentials (AUTH_GOOGLE_ID & AUTH_GOOGLE_SECRET). Please use email and password."
+      setErrorMessage(
+        err?.message || "Google sign in could not be initiated."
       );
     } finally {
       setGoogleLoading(false);
@@ -267,7 +279,7 @@ function SignInContent() {
         {/* Security Assurance Footer */}
         <div className="mt-6 pt-4 border-t border-zinc-900 flex items-center justify-center gap-1.5 text-xs text-zinc-500">
           <CheckCircle2 className="w-3.5 h-3.5 text-zinc-400" />
-          <span>Protected by Convex Auth & Enterprise RBAC</span>
+          <span>Protected by InsForge Auth & Enterprise RBAC</span>
         </div>
       </div>
 

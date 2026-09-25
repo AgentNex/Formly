@@ -124,3 +124,17 @@ test("lib/flowCompiler.ts - applyDagLayout spaces nodes horizontally", () => {
   assert.ok(startNode.position.x < f1Node.position.x);
   assert.ok(f1Node.position.x < endNode.position.x);
 });
+
+test("lib/insforge.ts - client initialized with valid base URL and anon key", async () => {
+  const { insforge, INSFORGE_BASE_URL, INSFORGE_ANON_KEY } = await import("../dist/lib/insforge.js");
+
+  assert.ok(INSFORGE_BASE_URL.includes("insforge.app"));
+  assert.ok(INSFORGE_ANON_KEY.startsWith("anon_"));
+  assert.equal(typeof insforge.auth.signInWithPassword, "function");
+  assert.equal(typeof insforge.auth.signUp, "function");
+  assert.equal(typeof insforge.auth.signInWithOAuth, "function");
+  assert.equal(typeof insforge.auth.verifyEmail, "function");
+  assert.equal(typeof insforge.auth.signOut, "function");
+  assert.equal(typeof insforge.auth.getCurrentUser, "function");
+});
+

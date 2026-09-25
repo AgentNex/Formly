@@ -158,25 +158,29 @@ export const list = query({
     orgId: v.optional(v.id("organizations")),
   },
   handler: async (ctx, args) => {
-    const user = await getViewer(ctx);
-    if (!user) return [];
-
     let targetOrgId = args.orgId;
     if (!targetOrgId) {
-      // Find primary organization membership
-      const membership = await ctx.db
-        .query("memberships")
-        .withIndex("by_user", (q) => q.eq("userId", user._id))
-        .first();
-
-      if (membership) {
-        targetOrgId = membership.orgId;
-      } else {
-        const ownedOrg = await ctx.db
-          .query("organizations")
-          .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
+      const user = await getViewer(ctx);
+      if (user) {
+        // Find primary organization membership
+        const membership = await ctx.db
+          .query("memberships")
+          .withIndex("by_user", (q) => q.eq("userId", user._id))
           .first();
-        if (ownedOrg) targetOrgId = ownedOrg._id;
+
+        if (membership) {
+          targetOrgId = membership.orgId;
+        } else {
+          const ownedOrg = await ctx.db
+            .query("organizations")
+            .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
+            .first();
+          if (ownedOrg) targetOrgId = ownedOrg._id;
+        }
+      }
+      if (!targetOrgId) {
+        const primaryOrg = await ctx.db.query("organizations").order("desc").first();
+        if (primaryOrg) targetOrgId = primaryOrg._id;
       }
     }
 

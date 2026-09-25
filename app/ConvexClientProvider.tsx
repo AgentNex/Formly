@@ -1,7 +1,6 @@
 "use client";
 
-import { ConvexAuthNextjsProvider } from "@convex-dev/auth/nextjs";
-import { ConvexReactClient } from "convex/react";
+import { ConvexProvider, ConvexReactClient } from "convex/react";
 import React, { ReactNode, useMemo, useState, useEffect } from "react";
 import { AuthProvider } from "@/lib/auth";
 
@@ -15,7 +14,9 @@ export function ConvexClientProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const client = useMemo(() => {
-    return new ConvexReactClient(rawConvexUrl || "https://placeholder.convex.cloud");
+    return new ConvexReactClient(
+      rawConvexUrl || "https://formly-enterprise.convex.cloud"
+    );
   }, []);
 
   if (!mounted) {
@@ -23,8 +24,8 @@ export function ConvexClientProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <ConvexAuthNextjsProvider client={client}>
+    <ConvexProvider client={client}>
       <AuthProvider>{children}</AuthProvider>
-    </ConvexAuthNextjsProvider>
+    </ConvexProvider>
   );
 }

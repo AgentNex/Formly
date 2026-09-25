@@ -8,10 +8,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node ./node_modules/typescript/bin/tsc lib/utils.ts lib/rbac.ts convex/compiler.ts lib/flowCompiler.ts --outDir ./dist --module esnext --target es2022 --moduleResolution node --skipLibCheck && node --test tests/compiler.test.mjs tests/unit_test_all_files.test.mjs"
+    "test": "node ./node_modules/typescript/bin/tsc lib/utils.ts lib/rbac.ts lib/insforge.ts convex/compiler.ts lib/flowCompiler.ts --outDir ./dist --module esnext --target es2022 --moduleResolution node --skipLibCheck && node --test tests/compiler.test.mjs tests/unit_test_all_files.test.mjs"
   },
   "dependencies": {
     "@convex-dev/auth": "^0.0.95",
+    "@insforge/sdk": "^1.5.2",
     "@xyflow/react": "^12.11.5",
     "clsx": "^2.1.1",
     "convex": "^1.45.0",
