@@ -36,7 +36,6 @@
     "typescript": "^5.4.5"
   },
   "optionalDependencies": {
-    "@next/swc-android-arm64": "npm:null@*",
     "@next/swc-wasm-nodejs": "^14.2.18"
   }
 }
