@@ -67,6 +67,9 @@ export interface AuthContextType {
     email: string,
     otp: string
   ) => Promise<{ data: any; error: any }>;
+  resendVerificationEmail: (
+    email: string
+  ) => Promise<{ data: any; error: any }>;
   signOut: () => Promise<void>;
 }
 
@@ -83,6 +86,7 @@ const AuthContext = createContext<AuthContextType>({
   signUp: async () => ({ data: null, error: null }),
   signInWithOAuth: async () => ({}),
   verifyEmail: async () => ({ data: null, error: null }),
+  resendVerificationEmail: async () => ({ data: null, error: null }),
   signOut: async () => {},
 });
 
@@ -254,16 +258,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email: u.email,
           name: (u as any).profile?.name || (u as any).name || u.email?.split("@")[0],
         });
-        await syncViewerMutation({
-          email: u.email,
-          name: (u as any).profile?.name || (u as any).name || u.email?.split("@")[0],
-          externalId: u.id,
-        }).catch((e) => console.warn("Sync on verify:", e));
+        // Non-blocking background sync with a 1.5s timeout safeguard
+        Promise.race([
+          syncViewerMutation({
+            email: u.email,
+            name: (u as any).profile?.name || (u as any).name || u.email?.split("@")[0],
+            externalId: u.id,
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Convex sync timeout")), 1500)),
+        ]).catch((e) => console.warn("Convex background sync note:", e));
       }
       return res;
     },
     [syncViewerMutation]
   );
+
+  const resendVerificationEmail = useCallback(async (email: string) => {
+    return await insforge.auth.resendVerificationEmail({
+      email: email.trim().toLowerCase(),
+    });
+  }, []);
 
   const signOut = useCallback(async () => {
     try {
@@ -299,11 +313,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const value = useMemo<AuthContextType>(() => {
-    const isAuthenticated = Boolean(
-      insforgeUser && (viewerData?.user || insforgeUser.email)
-    );
-    const isLoading =
-      isInitializing || (Boolean(insforgeUser) && viewerData === undefined);
+    const isAuthenticated = Boolean(insforgeUser);
+    const isLoading = isInitializing;
 
     const resolvedUser: FormlyUser | null = viewerData?.user
       ? (viewerData.user as FormlyUser)
@@ -334,6 +345,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signUp,
       signInWithOAuth,
       verifyEmail,
+      resendVerificationEmail,
       signOut,
     };
   }, [
@@ -345,6 +357,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signUp,
     signInWithOAuth,
     verifyEmail,
+    resendVerificationEmail,
     signOut,
   ]);
 
