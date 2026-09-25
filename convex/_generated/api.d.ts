@@ -11,13 +11,27 @@
 
 import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server";
 import type * as analytics from "../analytics.js";
+import type * as apiKeys from "../apiKeys.js";
+import type * as audit from "../audit.js";
+import type * as auth from "../auth.js";
 import type * as forms from "../forms.js";
+import type * as organizations from "../organizations.js";
 import type * as projects from "../projects.js";
+import type * as submissions from "../submissions.js";
+import type * as users from "../users.js";
+import type * as webhooks from "../webhooks.js";
 
 declare const fullApi: ApiFromModules<{
   analytics: typeof analytics;
+  apiKeys: typeof apiKeys;
+  audit: typeof audit;
+  auth: typeof auth;
   forms: typeof forms;
+  organizations: typeof organizations;
   projects: typeof projects;
+  submissions: typeof submissions;
+  users: typeof users;
+  webhooks: typeof webhooks;
 }>;
 
 export declare const api: FilterApi<typeof fullApi, FunctionReference<any, "public">>;

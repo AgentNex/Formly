@@ -69,13 +69,12 @@ export const recordEvent = mutation({
 export const getStats = query({
   args: {
     formId: v.id("forms"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db.get(args.formId);
     if (!form) return null;
 
-    await requireOrgMembership(ctx, form.orgId, "viewer", args.devToken);
+    await requireOrgMembership(ctx, form.orgId, "viewer");
 
     // 1. Fetch pre-aggregated total metrics
     const totalAgg = await ctx.db
@@ -154,13 +153,12 @@ export const getStats = query({
 export const getFunnel = query({
   args: {
     formId: v.id("forms"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db.get(args.formId);
     if (!form) return [];
 
-    await requireOrgMembership(ctx, form.orgId, "viewer", args.devToken);
+    await requireOrgMembership(ctx, form.orgId, "viewer");
 
     // Bounded query for recent step_viewed events
     const events = await ctx.db

@@ -5,10 +5,9 @@ import { requireOrgMembership } from "./auth_helpers";
 export const list = query({
   args: {
     orgId: v.id("organizations"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireOrgMembership(ctx, args.orgId, "admin", args.devToken);
+    await requireOrgMembership(ctx, args.orgId, "admin");
 
     return await ctx.db
       .query("webhooks")
@@ -22,10 +21,9 @@ export const create = mutation({
     orgId: v.id("organizations"),
     url: v.string(),
     events: v.string(), // JSON array of event names
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireOrgMembership(ctx, args.orgId, "admin", args.devToken);
+    const { user } = await requireOrgMembership(ctx, args.orgId, "admin");
 
     const secret = `whsec_${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}`;
     const now = Date.now();
@@ -44,7 +42,7 @@ export const create = mutation({
     await ctx.db.insert("audit_logs", {
       orgId: args.orgId,
       actorId: user._id,
-      actorEmail: user.email,
+      actorEmail: user.email || "user@formly.local",
       action: "webhook.created",
       resourceType: "webhook",
       resourceId: webhookId,
@@ -65,13 +63,12 @@ export const update = mutation({
     webhookId: v.id("webhooks"),
     status: v.string(), // "active" | "disabled"
     events: v.optional(v.string()),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const wh = await ctx.db.get(args.webhookId);
     if (!wh) throw new Error("Webhook not found");
 
-    await requireOrgMembership(ctx, wh.orgId, "admin", args.devToken);
+    await requireOrgMembership(ctx, wh.orgId, "admin");
 
     await ctx.db.patch(args.webhookId, {
       status: args.status,
@@ -86,13 +83,12 @@ export const update = mutation({
 export const remove = mutation({
   args: {
     webhookId: v.id("webhooks"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const wh = await ctx.db.get(args.webhookId);
     if (!wh) throw new Error("Webhook not found");
 
-    await requireOrgMembership(ctx, wh.orgId, "admin", args.devToken);
+    await requireOrgMembership(ctx, wh.orgId, "admin");
 
     await ctx.db.delete(args.webhookId);
 

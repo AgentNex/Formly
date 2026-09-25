@@ -1,17 +1,20 @@
+import { authTables } from "@convex-dev/auth/server";
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
-  // Users: Authenticated identity mapping
+  ...authTables,
+
+  // Users: Authenticated identity mapping with extended Formly profile fields
   users: defineTable({
-    tokenIdentifier: v.string(), // Server-derived identity subject from ctx.auth
-    email: v.string(),
-    name: v.string(),
+    ...authTables.users.validator.fields,
+    tokenIdentifier: v.optional(v.string()),
     avatar: v.optional(v.string()),
     role: v.optional(v.string()),
-    createdAt: v.number(),
-    updatedAt: v.number(),
+    createdAt: v.optional(v.number()),
+    updatedAt: v.optional(v.number()),
   })
+    .index("email", ["email"])
     .index("by_tokenIdentifier", ["tokenIdentifier"])
     .index("by_email", ["email"]),
 

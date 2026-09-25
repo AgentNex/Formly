@@ -6,10 +6,9 @@ export const list = query({
   args: {
     orgId: v.id("organizations"),
     limit: v.optional(v.number()),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireOrgMembership(ctx, args.orgId, "admin", args.devToken);
+    await requireOrgMembership(ctx, args.orgId, "admin");
 
     const maxResults = args.limit || 100;
     const logs = await ctx.db

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cn } from "../dist/lib/utils.js";
-import { getOrCreateUserId } from "../dist/lib/user.js";
+import { ROLE_HIERARCHY, hasMinimumRole, isPublicPath } from "../dist/lib/rbac.js";
 import {
   applyDagLayout,
   evaluateLogicCondition,
@@ -16,19 +16,37 @@ test("lib/utils.ts - cn merges classes cleanly", () => {
   assert.equal(result.includes("bg-black"), false);
 });
 
-test("lib/user.ts - getOrCreateUserId creates and persists user", () => {
-  const mockStore = {};
-  global.window = {};
-  global.localStorage = {
-    getItem: (key) => mockStore[key] || null,
-    setItem: (key, val) => { mockStore[key] = val; }
-  };
+test("lib/rbac.ts - role hierarchy respects strict privilege ranking", () => {
+  assert.ok(ROLE_HIERARCHY.owner > ROLE_HIERARCHY.admin);
+  assert.ok(ROLE_HIERARCHY.admin > ROLE_HIERARCHY.editor);
+  assert.ok(ROLE_HIERARCHY.editor > ROLE_HIERARCHY.analyst);
+  assert.ok(ROLE_HIERARCHY.analyst > ROLE_HIERARCHY.viewer);
+  assert.ok(ROLE_HIERARCHY.viewer > ROLE_HIERARCHY.billing);
 
-  const id1 = getOrCreateUserId();
-  assert.ok(id1.startsWith("usr_"));
+  // hasMinimumRole checks
+  assert.equal(hasMinimumRole("owner", "admin"), true);
+  assert.equal(hasMinimumRole("owner", "viewer"), true);
+  assert.equal(hasMinimumRole("admin", "owner"), false);
+  assert.equal(hasMinimumRole("editor", "editor"), true);
+  assert.equal(hasMinimumRole("editor", "admin"), false);
+  assert.equal(hasMinimumRole("viewer", "editor"), false);
+  assert.equal(hasMinimumRole("billing", "viewer"), false);
+});
 
-  const id2 = getOrCreateUserId();
-  assert.equal(id1, id2);
+test("lib/rbac.ts - route authorization distinguishes public from protected paths", () => {
+  // Public routes (respondents & auth)
+  assert.equal(isPublicPath("/f/customer-survey"), true);
+  assert.equal(isPublicPath("/signin"), true);
+  assert.equal(isPublicPath("/signup"), true);
+  assert.equal(isPublicPath("/forgot-password"), true);
+  assert.equal(isPublicPath("/api/auth/callback"), true);
+
+  // Private protected routes (fail-closed)
+  assert.equal(isPublicPath("/"), false);
+  assert.equal(isPublicPath("/project/p_12345"), false);
+  assert.equal(isPublicPath("/project/p_12345/analytics"), false);
+  assert.equal(isPublicPath("/project/p_12345/share"), false);
+  assert.equal(isPublicPath("/dashboard"), false);
 });
 
 test("convex/compiler.ts - rejects loops and cycles", () => {

@@ -1,6 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { getViewer, requireOrgMembership } from "./auth_helpers";
+import { getViewer, requireUser, requireOrgMembership } from "./auth_helpers";
 import { Doc, Id } from "./_generated/dataModel";
 
 // Canonical starter template nodes
@@ -156,10 +156,9 @@ function generateSlug(): string {
 export const list = query({
   args: {
     orgId: v.optional(v.id("organizations")),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await getViewer(ctx, args.devToken);
+    const user = await getViewer(ctx);
     if (!user) return [];
 
     let targetOrgId = args.orgId;
@@ -247,13 +246,12 @@ export const list = query({
 export const get = query({
   args: {
     projectId: v.id("projects"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
     if (!project || project.status === "deleted") return null;
 
-    await requireOrgMembership(ctx, project.orgId, "viewer", args.devToken);
+    await requireOrgMembership(ctx, project.orgId, "viewer");
 
     const form = await ctx.db
       .query("forms")
@@ -272,11 +270,9 @@ export const create = mutation({
     name: v.string(),
     description: v.optional(v.string()),
     orgId: v.optional(v.id("organizations")),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await getViewer(ctx, args.devToken);
-    if (!user) throw new Error("Unauthorized");
+    const user = await requireUser(ctx);
 
     let targetOrgId = args.orgId;
     if (!targetOrgId) {
@@ -297,7 +293,7 @@ export const create = mutation({
 
     if (!targetOrgId) throw new Error("No organization found for user.");
 
-    await requireOrgMembership(ctx, targetOrgId, "editor", args.devToken);
+    await requireOrgMembership(ctx, targetOrgId, "editor");
 
     const now = Date.now();
     const slug = generateSlug();
@@ -349,7 +345,7 @@ export const create = mutation({
     await ctx.db.insert("audit_logs", {
       orgId: targetOrgId,
       actorId: user._id,
-      actorEmail: user.email,
+      actorEmail: user.email || "user@formly.local",
       action: "project.created",
       resourceType: "project",
       resourceId: projectId,
@@ -366,13 +362,12 @@ export const update = mutation({
     projectId: v.id("projects"),
     name: v.string(),
     description: v.optional(v.string()),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
     if (!project) throw new Error("Project not found");
 
-    const { user } = await requireOrgMembership(ctx, project.orgId, "editor", args.devToken);
+    const { user } = await requireOrgMembership(ctx, project.orgId, "editor");
     const now = Date.now();
 
     await ctx.db.patch(args.projectId, {
@@ -403,13 +398,12 @@ export const update = mutation({
 export const archive = mutation({
   args: {
     projectId: v.id("projects"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
     if (!project) throw new Error("Project not found");
 
-    const { user } = await requireOrgMembership(ctx, project.orgId, "admin", args.devToken);
+    const { user } = await requireOrgMembership(ctx, project.orgId, "admin");
     const now = Date.now();
 
     await ctx.db.patch(args.projectId, {
@@ -420,7 +414,7 @@ export const archive = mutation({
     await ctx.db.insert("audit_logs", {
       orgId: project.orgId,
       actorId: user._id,
-      actorEmail: user.email,
+      actorEmail: user.email || "user@formly.local",
       action: "project.archived",
       resourceType: "project",
       resourceId: project._id,

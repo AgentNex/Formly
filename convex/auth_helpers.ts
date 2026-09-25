@@ -1,111 +1,123 @@
 import { QueryCtx, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
+import { getAuthUserId } from "@convex-dev/auth/server";
 
-export type UserRole = "owner" | "admin" | "editor" | "analyst" | "viewer" | "billing";
-
-const ROLE_HIERARCHY: Record<UserRole, number> = {
-  owner: 100,
-  admin: 80,
-  editor: 60,
-  analyst: 40,
-  viewer: 20,
-  billing: 10,
-};
+import { UserRole, ROLE_HIERARCHY, hasMinimumRole } from "../lib/rbac";
+export { type UserRole, ROLE_HIERARCHY, hasMinimumRole } from "../lib/rbac";
 
 /**
- * Resolves current authenticated viewer.
- * Checks ctx.auth.getUserIdentity(). In local/preview without auth provider,
- * falls back to a deterministic development identity so workflows run without blocker.
+ * Ensures an authenticated user has at least one organization and owner membership.
+ * Deterministic and idempotent.
  */
-export async function getViewer(
-  ctx: QueryCtx | MutationCtx,
-  devFallbackToken?: string
-): Promise<Doc<"users"> | null> {
-  const identity = await ctx.auth.getUserIdentity();
-
-  let tokenIdentifier: string;
-  let email: string;
-  let name: string;
-  let avatar: string | undefined;
-
-  if (identity) {
-    tokenIdentifier = identity.tokenIdentifier;
-    email = identity.email || `${identity.subject}@auth.formly.local`;
-    name = identity.name || identity.nickname || "Formly User";
-    avatar = identity.pictureUrl;
-  } else if (devFallbackToken) {
-    tokenIdentifier = `dev:${devFallbackToken}`;
-    email = `${devFallbackToken}@formly.local`;
-    name = devFallbackToken.replace(/^usr_/, "User ");
-  } else {
-    // Default system/guest developer identity
-    tokenIdentifier = "system:default_admin";
-    email = "admin@formly.enterprise";
-    name = "Enterprise Admin";
-  }
-
-  // Look up user by tokenIdentifier
-  const existingUser = await ctx.db
-    .query("users")
-    .withIndex("by_tokenIdentifier", (q) => q.eq("tokenIdentifier", tokenIdentifier))
+export async function ensureUserOrganization(
+  ctx: MutationCtx,
+  user: Doc<"users">
+): Promise<{ org: Doc<"organizations">; membership: Doc<"memberships"> }> {
+  // Check if user already has an active membership
+  const existingMembership = await ctx.db
+    .query("memberships")
+    .withIndex("by_user", (q) => q.eq("userId", user._id))
     .first();
 
-  if (existingUser) {
-    return existingUser;
+  if (existingMembership) {
+    const org = await ctx.db.get(existingMembership.orgId);
+    if (org) {
+      return { org, membership: existingMembership };
+    }
   }
 
-  // If we are in a mutation context, create the user
+  // Check if user owns an organization directly
+  const ownedOrg = await ctx.db
+    .query("organizations")
+    .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
+    .first();
+
+  if (ownedOrg) {
+    const memberDoc = await ctx.db
+      .query("memberships")
+      .withIndex("by_org_user", (q) => q.eq("orgId", ownedOrg._id).eq("userId", user._id))
+      .first();
+
+    if (memberDoc) {
+      return { org: ownedOrg, membership: memberDoc };
+    }
+
+    const membershipId = await ctx.db.insert("memberships", {
+      orgId: ownedOrg._id,
+      userId: user._id,
+      role: "owner",
+      joinedAt: Date.now(),
+    });
+    const membership = (await ctx.db.get(membershipId))!;
+    return { org: ownedOrg, membership };
+  }
+
+  // Create default organization
+  const now = Date.now();
+  const userName = user.name || (user.email ? user.email.split("@")[0] : "Workspace");
+  const cleanBase = userName.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) || "workspace";
+  const orgSlug = `${cleanBase}-${Math.random().toString(36).substring(2, 6)}`;
+
+  const orgId = await ctx.db.insert("organizations", {
+    name: `${userName}'s Organization`,
+    slug: orgSlug,
+    ownerId: user._id,
+    plan: "pro",
+    quotas: {
+      maxForms: 50,
+      maxSubmissionsPerMonth: 10000,
+      maxMembers: 10,
+    },
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const membershipId = await ctx.db.insert("memberships", {
+    orgId,
+    userId: user._id,
+    role: "owner",
+    joinedAt: now,
+  });
+
+  const org = (await ctx.db.get(orgId))!;
+  const membership = (await ctx.db.get(membershipId))!;
+  return { org, membership };
+}
+
+/**
+ * Resolves current authenticated viewer using genuine Convex Auth.
+ * Returns null if not authenticated.
+ * NO development fallback identities, NO default admin backdoors.
+ */
+export async function getViewer(
+  ctx: QueryCtx | MutationCtx
+): Promise<Doc<"users"> | null> {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) {
+    return null;
+  }
+
+  const user = await ctx.db.get(userId);
+  if (!user) {
+    return null;
+  }
+
+  // If in mutation context, ensure tenant organization is provisioned
   if ("insert" in ctx.db) {
-    const now = Date.now();
-    const newUserId = await ctx.db.insert("users", {
-      tokenIdentifier,
-      email,
-      name,
-      avatar,
-      role: "owner",
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    // Create default organization for new user
-    const slugBase = name.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) || "workspace";
-    const orgSlug = `${slugBase}-${Math.random().toString(36).substring(2, 6)}`;
-    const orgId = await ctx.db.insert("organizations", {
-      name: `${name}'s Organization`,
-      slug: orgSlug,
-      ownerId: newUserId,
-      plan: "pro",
-      quotas: {
-        maxForms: 50,
-        maxSubmissionsPerMonth: 10000,
-        maxMembers: 10,
-      },
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    // Create owner membership
-    await ctx.db.insert("memberships", {
-      orgId,
-      userId: newUserId,
-      role: "owner",
-      joinedAt: now,
-    });
-
-    return await ctx.db.get(newUserId);
+    await ensureUserOrganization(ctx as MutationCtx, user);
   }
 
-  return null;
+  return user;
 }
 
 /**
  * Requires an authenticated user or throws an unauthorized error.
+ * Fail-closed security guarantee.
  */
 export async function requireUser(
-  ctx: QueryCtx | MutationCtx,
-  devFallbackToken?: string
+  ctx: QueryCtx | MutationCtx
 ): Promise<Doc<"users">> {
-  const user = await getViewer(ctx, devFallbackToken);
+  const user = await getViewer(ctx);
   if (!user) {
     throw new Error("Unauthorized: Identity could not be verified.");
   }
@@ -119,10 +131,9 @@ export async function requireUser(
 export async function requireOrgMembership(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  minRole: UserRole = "viewer",
-  devFallbackToken?: string
+  minRole: UserRole = "viewer"
 ): Promise<{ user: Doc<"users">; membership: Doc<"memberships"> }> {
-  const user = await requireUser(ctx, devFallbackToken);
+  const user = await requireUser(ctx);
 
   const membership = await ctx.db
     .query("memberships")
@@ -149,10 +160,7 @@ export async function requireOrgMembership(
     throw new Error(`Forbidden: User does not belong to organization ${orgId}`);
   }
 
-  const userRoleRank = ROLE_HIERARCHY[membership.role as UserRole] || 0;
-  const requiredRoleRank = ROLE_HIERARCHY[minRole] || 0;
-
-  if (userRoleRank < requiredRoleRank) {
+  if (!hasMinimumRole(membership.role as UserRole, minRole)) {
     throw new Error(
       `Forbidden: Role '${membership.role}' does not meet required minimum '${minRole}'.`
     );

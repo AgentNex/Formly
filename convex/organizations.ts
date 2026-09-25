@@ -5,10 +5,9 @@ import { getViewer, requireOrgMembership } from "./auth_helpers";
 export const getCurrent = query({
   args: {
     orgId: v.optional(v.id("organizations")),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await getViewer(ctx, args.devToken);
+    const user = await getViewer(ctx);
     if (!user) return null;
 
     let targetOrgId = args.orgId;
@@ -67,10 +66,9 @@ export const getCurrent = query({
 export const listMembers = query({
   args: {
     orgId: v.id("organizations"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireOrgMembership(ctx, args.orgId, "viewer", args.devToken);
+    await requireOrgMembership(ctx, args.orgId, "viewer");
 
     const memberships = await ctx.db
       .query("memberships")
@@ -99,10 +97,9 @@ export const inviteMember = mutation({
     email: v.string(),
     name: v.string(),
     role: v.string(), // "admin" | "editor" | "analyst" | "viewer"
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireOrgMembership(ctx, args.orgId, "admin", args.devToken);
+    const { user } = await requireOrgMembership(ctx, args.orgId, "admin");
 
     const email = args.email.toLowerCase().trim();
 
@@ -147,7 +144,7 @@ export const inviteMember = mutation({
     await ctx.db.insert("audit_logs", {
       orgId: args.orgId,
       actorId: user._id,
-      actorEmail: user.email,
+      actorEmail: user.email || "user@formly.local",
       action: "member.invited",
       resourceType: "organization",
       resourceId: args.orgId,
@@ -163,13 +160,12 @@ export const updateRole = mutation({
   args: {
     membershipId: v.id("memberships"),
     newRole: v.string(),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const targetMembership = await ctx.db.get(args.membershipId);
     if (!targetMembership) throw new Error("Membership not found");
 
-    const { user } = await requireOrgMembership(ctx, targetMembership.orgId, "admin", args.devToken);
+    const { user } = await requireOrgMembership(ctx, targetMembership.orgId, "admin");
 
     await ctx.db.patch(args.membershipId, {
       role: args.newRole,
@@ -178,7 +174,7 @@ export const updateRole = mutation({
     await ctx.db.insert("audit_logs", {
       orgId: targetMembership.orgId,
       actorId: user._id,
-      actorEmail: user.email,
+      actorEmail: user.email || "user@formly.local",
       action: "member.role_updated",
       resourceType: "membership",
       resourceId: args.membershipId,

@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useMemo, useEffect } from "react";
+import { useQuery, useMutation } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import { useAuth } from "./auth";
 import { FormNode, FormEdge, CompiledFormSchema, FormSettings } from "./types/flow";
 import { compileFlow } from "./flowCompiler";
 
@@ -49,28 +52,6 @@ export interface SubmissionRecord {
   durationSeconds?: number;
   status: "submitted" | "verified" | "flagged" | "archived";
   submittedAt: number;
-}
-
-const STORAGE_PREFIX = "formly_store_";
-
-function getStorage<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback;
-  try {
-    const raw = localStorage.getItem(STORAGE_PREFIX + key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function setStorage<T>(key: string, val: T): void {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(val));
-    window.dispatchEvent(new Event("formly_storage_update"));
-  } catch {
-    // Ignore quota errors
-  }
 }
 
 export function generateSlug(): string {
@@ -238,146 +219,75 @@ export const initialDemoEdges: FormEdge[] = [
   },
 ];
 
-export function initializeDefaultStore(userId: string) {
-  if (typeof window === "undefined") return;
-
-  const projects = getStorage<ProjectRecord[]>("projects", []);
-  if (projects.length === 0) {
-    const pId = "proj_feedback_demo";
-    const fId = "form_feedback_demo";
-    const slug = "feedback";
-    const now = Date.now();
-
-    const compiled = compileFlow(
-      initialDemoNodes,
-      initialDemoEdges,
-      "Enterprise Product Experience Survey",
-      "Help us shape the future of our platform"
-    );
-
-    const demoProject: ProjectRecord = {
-      id: pId,
-      userId,
-      name: "Enterprise Product Experience Survey",
-      description: "Customer feedback workflow with intelligent rating branch and NPS metric",
-      createdAt: now,
-      updatedAt: now,
-      formId: fId,
-      slug,
-      status: "published",
-      revision: 1,
-      isPublished: true,
-      viewCount: 12,
-      submissionCount: 8,
-      conversionRate: 67,
-    };
-
-    const demoForm: FormRecord = {
-      id: fId,
-      projectId: pId,
-      userId,
-      title: "Enterprise Product Experience Survey",
-      description: "Customer feedback workflow with intelligent rating branch and NPS metric",
-      slug,
-      status: "published",
-      revision: 1,
-      nodes: initialDemoNodes,
-      edges: initialDemoEdges,
-      compiledSchema: compiled.schema,
-      isPublished: true,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const demoSubs: SubmissionRecord[] = [
-      {
-        id: "sub_1",
-        formId: fId,
-        slug,
-        respondentId: "resp_alex@enterprise.com",
-        answers: {
-          field_email: "alex@enterprise.com",
-          field_rating: 5,
-          field_positive: "The DAG auto-layout and node-based conditional logic saved hours of form design.",
-          field_nps: 10,
-        },
-        durationSeconds: 42,
-        status: "verified",
-        submittedAt: now - 3600000 * 4,
-      },
-      {
-        id: "sub_2",
-        formId: fId,
-        slug,
-        respondentId: "resp_jordan@startup.io",
-        answers: {
-          field_email: "jordan@startup.io",
-          field_rating: 4,
-          field_positive: "Monochromatic black and zinc UI is sleek and exceptionally fast.",
-          field_nps: 9,
-        },
-        durationSeconds: 38,
-        status: "submitted",
-        submittedAt: now - 3600000 * 2,
-      },
-      {
-        id: "sub_3",
-        formId: fId,
-        slug,
-        respondentId: "resp_dev@company.org",
-        answers: {
-          field_email: "dev@company.org",
-          field_rating: 2,
-          field_improvement: "Would love automated webhooks and Slack notifications for incoming leads.",
-          field_nps: 7,
-        },
-        durationSeconds: 55,
-        status: "submitted",
-        submittedAt: now - 1800000,
-      },
-    ];
-
-    setStorage("projects", [demoProject]);
-    setStorage(`form_${fId}`, demoForm);
-    setStorage(`form_by_slug_${slug}`, fId);
-    setStorage(`subs_${fId}`, demoSubs);
+/**
+ * Audit and purge any legacy mock tokens or identities from localStorage.
+ */
+export function initializeDefaultStore(_userId?: string) {
+  if (typeof window !== "undefined") {
+    try {
+      localStorage.removeItem("formly_user_id");
+      localStorage.removeItem("formly_store_projects");
+    } catch {
+      // ignore
+    }
   }
 }
 
-export function useProjects(userId: string) {
-  const [projects, setProjects] = useState<ProjectRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+/**
+ * Authoritative Convex query & mutation hook for organization projects.
+ */
+export function useProjects(userId?: string) {
+  const { currentOrganization, isAuthenticated } = useAuth();
 
-  const reload = useCallback(() => {
-    initializeDefaultStore(userId);
-    const list = getStorage<ProjectRecord[]>("projects", []);
-    setProjects(list);
-    setLoading(false);
-  }, [userId]);
+  const convexProjects = useQuery(
+    api.projects.list,
+    isAuthenticated && currentOrganization ? { orgId: currentOrganization._id as any } : {}
+  );
 
-  useEffect(() => {
-    reload();
-    window.addEventListener("formly_storage_update", reload);
-    return () => window.removeEventListener("formly_storage_update", reload);
-  }, [reload]);
+  const createProjectMutation = useMutation(api.projects.create);
+  const archiveProjectMutation = useMutation(api.projects.archive);
 
-  const createProject = (name: string, description?: string): ProjectRecord => {
-    const pId = `proj_${Date.now().toString(36)}`;
-    const fId = `form_${Date.now().toString(36)}`;
-    const slug = generateSlug();
-    const now = Date.now();
+  const projects = useMemo<ProjectRecord[]>(() => {
+    if (!convexProjects) return [];
+    return convexProjects.map((p) => ({
+      id: p._id,
+      userId: userId || "",
+      name: p.name,
+      description: p.description,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      formId: p.formId || "",
+      slug: p.slug || "",
+      status: (p.formStatus as any) || "draft",
+      revision: p.revision || 1,
+      isPublished: p.isPublished || false,
+      viewCount: p.viewCount || 0,
+      submissionCount: p.submissionCount || 0,
+      conversionRate: p.conversionRate || 0,
+    }));
+  }, [convexProjects, userId]);
 
-    const compiled = compileFlow(initialDemoNodes, initialDemoEdges, name, description);
+  const loading = convexProjects === undefined && isAuthenticated;
 
-    const newProject: ProjectRecord = {
-      id: pId,
-      userId,
+  const createProject = async (
+    name: string,
+    description?: string
+  ): Promise<ProjectRecord> => {
+    const result = await createProjectMutation({
+      name: name.trim() || "Untitled Workflow",
+      description,
+      orgId: currentOrganization ? (currentOrganization._id as any) : undefined,
+    });
+
+    const newRecord: ProjectRecord = {
+      id: result.projectId,
+      userId: userId || "",
       name,
       description,
-      createdAt: now,
-      updatedAt: now,
-      formId: fId,
-      slug,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      formId: result.formId,
+      slug: result.slug,
       status: "draft",
       revision: 1,
       isPublished: false,
@@ -386,160 +296,161 @@ export function useProjects(userId: string) {
       conversionRate: 0,
     };
 
-    const newForm: FormRecord = {
-      id: fId,
-      projectId: pId,
-      userId,
-      title: name,
-      description,
-      slug,
-      status: "draft",
-      revision: 1,
-      nodes: initialDemoNodes,
-      edges: initialDemoEdges,
-      compiledSchema: compiled.schema,
-      isPublished: false,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const currentList = getStorage<ProjectRecord[]>("projects", []);
-    setStorage("projects", [newProject, ...currentList]);
-    setStorage(`form_${fId}`, newForm);
-    setStorage(`form_by_slug_${slug}`, fId);
-    setStorage(`subs_${fId}`, []);
-
-    return newProject;
+    return newRecord;
   };
 
-  const deleteProject = (id: string) => {
-    const currentList = getStorage<ProjectRecord[]>("projects", []);
-    const proj = currentList.find((p) => p.id === id);
-    if (proj) {
-      localStorage.removeItem(STORAGE_PREFIX + `form_${proj.formId}`);
-      localStorage.removeItem(STORAGE_PREFIX + `form_by_slug_${proj.slug}`);
-      localStorage.removeItem(STORAGE_PREFIX + `subs_${proj.formId}`);
-    }
-    setStorage(
-      "projects",
-      currentList.filter((p) => p.id !== id)
-    );
+  const deleteProject = async (id: string) => {
+    await archiveProjectMutation({
+      projectId: id as any,
+    });
   };
 
   return { projects, loading, createProject, deleteProject };
 }
 
-export function useFormProject(projectId: string, userId: string) {
-  const [project, setProject] = useState<ProjectRecord | null>(null);
-  const [form, setForm] = useState<FormRecord | null>(null);
-  const [loading, setLoading] = useState(true);
+/**
+ * Authoritative Convex hook for active project & form draft.
+ */
+export function useFormProject(projectId: string, userId?: string) {
+  const projectData = useQuery(api.projects.get, { projectId: projectId as any });
+  const saveDraftMutation = useMutation(api.forms.saveDraft);
+  const publishMutation = useMutation(api.forms.publish);
+  const unpublishMutation = useMutation(api.forms.unpublish);
 
-  const reload = useCallback(() => {
-    initializeDefaultStore(userId);
-    const list = getStorage<ProjectRecord[]>("projects", []);
-    const proj = list.find((p) => p.id === projectId) || null;
-    setProject(proj);
+  const loading = projectData === undefined;
+  const projectDoc = projectData?.project;
+  const formDoc = projectData?.form;
 
-    if (proj) {
-      const f = getStorage<FormRecord | null>(`form_${proj.formId}`, null);
-      setForm(f);
+  const project = useMemo<ProjectRecord | null>(() => {
+    if (!projectDoc) return null;
+    return {
+      id: projectDoc._id,
+      userId: userId || "",
+      name: projectDoc.name,
+      description: projectDoc.description,
+      createdAt: projectDoc.createdAt,
+      updatedAt: projectDoc.updatedAt,
+      formId: formDoc?._id || "",
+      slug: formDoc?.slug || "",
+      status: (formDoc?.status as any) || "draft",
+      revision: formDoc?.revision || 1,
+      isPublished: formDoc?.status === "published",
+      viewCount: 0,
+      submissionCount: 0,
+      conversionRate: 0,
+    };
+  }, [projectDoc, formDoc, userId]);
+
+  const form = useMemo<FormRecord | null>(() => {
+    if (!formDoc || !projectDoc) return null;
+    let nodes: FormNode[] = [];
+    let edges: FormEdge[] = [];
+    try {
+      nodes = JSON.parse(formDoc.nodes || "[]");
+      edges = JSON.parse(formDoc.edges || "[]");
+    } catch {
+      nodes = initialDemoNodes;
+      edges = initialDemoEdges;
     }
-    setLoading(false);
-  }, [projectId, userId]);
-
-  useEffect(() => {
-    reload();
-    window.addEventListener("formly_storage_update", reload);
-    return () => window.removeEventListener("formly_storage_update", reload);
-  }, [reload]);
+    const comp = compileFlow(nodes, edges, formDoc.title, formDoc.description);
+    return {
+      id: formDoc._id,
+      projectId: projectDoc._id,
+      userId: userId || "",
+      title: formDoc.title,
+      description: formDoc.description,
+      slug: formDoc.slug,
+      status: formDoc.status as any,
+      revision: formDoc.revision,
+      nodes,
+      edges,
+      compiledSchema: comp.schema,
+      isPublished: formDoc.status === "published",
+      createdAt: formDoc.createdAt,
+      updatedAt: formDoc.updatedAt,
+    };
+  }, [formDoc, projectDoc, userId]);
 
   const saveForm = async (
     title: string,
     nodes: FormNode[],
     edges: FormEdge[],
-    compiledSchemaString: string
+    _compiledSchemaString: string
   ) => {
-    if (!form || !project) return;
-    const now = Date.now();
-    const compiled = JSON.parse(compiledSchemaString);
-    const nextRevision = (form.revision || 1) + 1;
-
-    const updatedForm: FormRecord = {
-      ...form,
+    if (!formDoc) return;
+    await saveDraftMutation({
+      formId: formDoc._id,
+      expectedRevision: formDoc.revision,
       title,
-      nodes,
-      edges,
-      revision: nextRevision,
-      compiledSchema: compiled,
-      updatedAt: now,
-    };
-
-    const updatedProject: ProjectRecord = {
-      ...project,
-      name: title,
-      revision: nextRevision,
-      updatedAt: now,
-    };
-
-    setStorage(`form_${form.id}`, updatedForm);
-
-    const list = getStorage<ProjectRecord[]>("projects", []);
-    setStorage(
-      "projects",
-      list.map((p) => (p.id === project.id ? updatedProject : p))
-    );
+      description: formDoc.description,
+      nodes: JSON.stringify(nodes),
+      edges: JSON.stringify(edges),
+    });
   };
 
   const togglePublish = async (isPublished: boolean) => {
-    if (!form || !project) return;
-    const status = isPublished ? "published" : "paused";
-    const updatedForm = { ...form, isPublished, status };
-    const updatedProject = { ...project, isPublished, status };
-    setStorage(`form_${form.id}`, updatedForm);
-    const list = getStorage<ProjectRecord[]>("projects", []);
-    setStorage(
-      "projects",
-      list.map((p) => (p.id === project.id ? updatedProject : p))
-    );
+    if (!formDoc) return;
+    if (isPublished) {
+      await publishMutation({
+        formId: formDoc._id,
+      });
+    } else {
+      await unpublishMutation({
+        formId: formDoc._id,
+      });
+    }
   };
 
   return { project, form, loading, saveForm, togglePublish };
 }
 
+/**
+ * Authoritative Convex hook for public form runner. Anonymous respondents.
+ */
 export function usePublicForm(slug: string) {
-  const [form, setForm] = useState<FormRecord | null>(null);
-  const [loading, setLoading] = useState(true);
+  const publicForm = useQuery(api.forms.getBySlug, { slug });
+  const submitMutation = useMutation(api.submissions.submit);
+  const recordEventMutation = useMutation(api.analytics.recordEvent);
 
+  const loading = publicForm === undefined;
+
+  // Record initial view event
   useEffect(() => {
-    if (!slug) return;
-    initializeDefaultStore("usr_public");
-
-    const fId = getStorage<string | null>(`form_by_slug_${slug}`, null);
-    if (fId) {
-      const f = getStorage<FormRecord | null>(`form_${fId}`, null);
-      if (f && f.isPublished) {
-        setForm(f);
-        // Increment view count
-        const projects = getStorage<ProjectRecord[]>("projects", []);
-        setStorage(
-          "projects",
-          projects.map((p) => {
-            if (p.formId === fId) {
-              const v = (p.viewCount || 0) + 1;
-              const s = p.submissionCount || 0;
-              return {
-                ...p,
-                viewCount: v,
-                conversionRate: Math.round((s / v) * 100),
-              };
-            }
-            return p;
-          })
-        );
-      }
+    if (slug) {
+      const sessionId = `sess_${Math.random().toString(36).substring(2, 10)}`;
+      recordEventMutation({
+        slug,
+        sessionId,
+        eventType: "form_viewed",
+      }).catch(() => {});
     }
-    setLoading(false);
-  }, [slug]);
+  }, [slug, recordEventMutation]);
+
+  const form = useMemo<FormRecord | null>(() => {
+    if (!publicForm || !publicForm.compiledSchema) return null;
+    let compiled: CompiledFormSchema;
+    try {
+      compiled = JSON.parse(publicForm.compiledSchema);
+    } catch {
+      return null;
+    }
+    return {
+      id: publicForm.formId,
+      projectId: "",
+      userId: "",
+      title: publicForm.title,
+      description: publicForm.description,
+      slug: publicForm.slug,
+      status: publicForm.status as any,
+      revision: publicForm.versionNumber || 1,
+      nodes: [],
+      edges: [],
+      compiledSchema: compiled,
+      isPublished: publicForm.status === "published",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  }, [publicForm]);
 
   const submitResponse = async (
     answers: Record<string, unknown>,
@@ -548,68 +459,65 @@ export function usePublicForm(slug: string) {
     branchPath: string[]
   ): Promise<{ success: boolean; error?: string }> => {
     if (!form) return { success: false, error: "Form not loaded" };
-    const now = Date.now();
-    const sub: SubmissionRecord = {
-      id: `sub_${Date.now().toString(36)}`,
-      formId: form.id,
-      slug: form.slug,
-      respondentId: `resp_${intentId.slice(-6)}`,
-      answers,
-      branchPath,
-      durationSeconds,
-      status: "submitted",
-      submittedAt: now,
-    };
-
-    const existing = getStorage<SubmissionRecord[]>(`subs_${form.id}`, []);
-    setStorage(`subs_${form.id}`, [sub, ...existing]);
-
-    // Increment submission count
-    const projects = getStorage<ProjectRecord[]>("projects", []);
-    setStorage(
-      "projects",
-      projects.map((p) => {
-        if (p.formId === form.id) {
-          const v = p.viewCount || 1;
-          const s = (p.submissionCount || 0) + 1;
-          return {
-            ...p,
-            submissionCount: s,
-            conversionRate: Math.round((s / v) * 100),
-          };
-        }
-        return p;
-      })
-    );
-
-    return { success: true };
+    try {
+      const res = await submitMutation({
+        slug,
+        intentId,
+        respondentId: `resp_${intentId.slice(-8)}`,
+        answers: JSON.stringify(answers),
+        branchPath: JSON.stringify(branchPath),
+        durationSeconds,
+      });
+      return { success: res.success };
+    } catch (err: any) {
+      return { success: false, error: err?.message || "Submission failed" };
+    }
   };
 
   return { form, loading, submitResponse };
 }
 
+/**
+ * Authoritative Convex hook for analytics and submission inbox.
+ */
 export function useFormAnalytics(formId: string) {
-  const [submissions, setSubmissions] = useState<SubmissionRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const stats = useQuery(api.analytics.getStats, formId ? { formId: formId as any } : "skip");
+  const rawSubs = useQuery(api.submissions.list, formId ? { formId: formId as any } : "skip");
+  const updateStatusMutation = useMutation(api.submissions.updateStatus);
 
-  const reload = useCallback(() => {
-    if (!formId) return;
-    const list = getStorage<SubmissionRecord[]>(`subs_${formId}`, []);
-    setSubmissions(list);
-    setLoading(false);
-  }, [formId]);
+  const loading = (stats === undefined || rawSubs === undefined) && Boolean(formId);
 
-  useEffect(() => {
-    reload();
-    window.addEventListener("formly_storage_update", reload);
-    return () => window.removeEventListener("formly_storage_update", reload);
-  }, [reload]);
+  const submissions = useMemo<SubmissionRecord[]>(() => {
+    if (!rawSubs) return [];
+    return rawSubs.map((s) => {
+      let parsedAnswers: Record<string, unknown> = {};
+      try {
+        parsedAnswers = JSON.parse(s.answers);
+      } catch {
+        parsedAnswers = {};
+      }
+      return {
+        id: s._id,
+        formId: s.formId,
+        slug: "",
+        respondentId: s.respondentId,
+        answers: parsedAnswers,
+        durationSeconds: s.durationSeconds,
+        status: s.status as any,
+        submittedAt: s.submittedAt,
+      };
+    });
+  }, [rawSubs]);
 
-  const updateSubmissionStatus = (id: string, newStatus: "submitted" | "verified" | "flagged" | "archived") => {
-    const updated = submissions.map((s) => (s.id === id ? { ...s, status: newStatus } : s));
-    setStorage(`subs_${formId}`, updated);
-    setSubmissions(updated);
+  const updateSubmissionStatus = async (
+    id: string,
+    newStatus: "submitted" | "verified" | "flagged" | "archived"
+  ) => {
+    await updateStatusMutation({
+      submissionId: id as any,
+      status: newStatus,
+    });
   };
 
-  return { submissions, loading, updateSubmissionStatus };
+  return { submissions, loading, updateSubmissionStatus, stats };
 }

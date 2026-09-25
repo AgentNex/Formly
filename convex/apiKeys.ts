@@ -15,10 +15,9 @@ function pseudoHash(str: string): string {
 export const list = query({
   args: {
     orgId: v.id("organizations"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireOrgMembership(ctx, args.orgId, "admin", args.devToken);
+    await requireOrgMembership(ctx, args.orgId, "admin");
 
     const keys = await ctx.db
       .query("api_keys")
@@ -43,10 +42,9 @@ export const create = mutation({
     orgId: v.id("organizations"),
     name: v.string(),
     scopes: v.string(), // JSON stringified string[]
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireOrgMembership(ctx, args.orgId, "admin", args.devToken);
+    const { user } = await requireOrgMembership(ctx, args.orgId, "admin");
 
     const randomSuffix = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
     const prefix = `fml_live_${randomSuffix.slice(0, 6)}`;
@@ -68,7 +66,7 @@ export const create = mutation({
     await ctx.db.insert("audit_logs", {
       orgId: args.orgId,
       actorId: user._id,
-      actorEmail: user.email,
+      actorEmail: user.email || "user@formly.local",
       action: "api_key.created",
       resourceType: "api_key",
       resourceId: keyId,
@@ -88,13 +86,12 @@ export const create = mutation({
 export const revoke = mutation({
   args: {
     keyId: v.id("api_keys"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const key = await ctx.db.get(args.keyId);
     if (!key) throw new Error("Key not found");
 
-    const { user } = await requireOrgMembership(ctx, key.orgId, "admin", args.devToken);
+    const { user } = await requireOrgMembership(ctx, key.orgId, "admin");
 
     await ctx.db.patch(args.keyId, {
       status: "revoked",
@@ -103,7 +100,7 @@ export const revoke = mutation({
     await ctx.db.insert("audit_logs", {
       orgId: key.orgId,
       actorId: user._id,
-      actorEmail: user.email,
+      actorEmail: user.email || "user@formly.local",
       action: "api_key.revoked",
       resourceType: "api_key",
       resourceId: args.keyId,

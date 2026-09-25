@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ConvexClientProvider } from "./ConvexClientProvider";
+import { ConvexAuthNextjsServerProvider } from "@convex-dev/auth/nextjs/server";
 
 export const metadata: Metadata = {
   title: "Formly | Enterprise Workflow Form Platform",
@@ -16,10 +17,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <body className="bg-black text-zinc-100 min-h-screen flex flex-col antialiased selection:bg-white selection:text-black font-sans">
-        <ConvexClientProvider>{children}</ConvexClientProvider>
-      </body>
-    </html>
+    <ConvexAuthNextjsServerProvider>
+      <html lang="en" className="dark">
+        <body className="bg-black text-zinc-100 min-h-screen flex flex-col antialiased selection:bg-white selection:text-black font-sans">
+          <ConvexClientProvider>{children}</ConvexClientProvider>
+        </body>
+      </html>
+    </ConvexAuthNextjsServerProvider>
   );
 }

@@ -19,12 +19,13 @@ import {
   Users,
   CheckCircle2,
   Sparkles,
-  Building2,
   Search,
   Share2,
   QrCode,
   ShieldCheck,
 } from "lucide-react";
+import { UserNav } from "@/components/UserNav";
+import { AuthGuard } from "@/components/AuthGuard";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -57,10 +58,10 @@ export default function DashboardPage() {
   const avgConversion =
     totalViews > 0 ? Math.round((totalSubs / totalViews) * 100) : 0;
 
-  const handleCreate = (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
-    const proj = createProject(newTitle, newDesc);
+    const proj = await createProject(newTitle, newDesc);
     setIsCreateOpen(false);
     setNewTitle("");
     setNewDesc("");
@@ -79,50 +80,39 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="min-h-screen bg-black text-zinc-100 flex flex-col">
-      {/* Top Main Navigation */}
-      <header className="h-16 border-b border-zinc-800 bg-zinc-950 px-6 sm:px-12 flex items-center justify-between sticky top-0 z-20 backdrop-blur">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-white text-black flex items-center justify-center font-black">
-              <Workflow className="w-4 h-4" />
+    <AuthGuard>
+      <div className="min-h-screen bg-black text-zinc-100 flex flex-col">
+        {/* Top Main Navigation */}
+        <header className="h-16 border-b border-zinc-800 bg-zinc-950 px-6 sm:px-12 flex items-center justify-between sticky top-0 z-20 backdrop-blur">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-white text-black flex items-center justify-center font-black">
+                <Workflow className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="text-sm font-bold tracking-tight text-white block">
+                  Formly
+                </span>
+                <span className="text-[10px] font-mono text-zinc-500 block">
+                  Enterprise Workflow Builder
+                </span>
+              </div>
             </div>
-            <div>
-              <span className="text-sm font-bold tracking-tight text-white block">
-                Formly
-              </span>
-              <span className="text-[10px] font-mono text-zinc-500 block">
-                Enterprise Workflow Builder
-              </span>
-            </div>
           </div>
 
-          {/* Org Workspace Switcher Pill */}
-          <div className="hidden md:flex items-center gap-2 border border-zinc-800 bg-zinc-900/60 rounded-xl px-3 py-1.5 text-xs text-zinc-300">
-            <Building2 className="w-3.5 h-3.5 text-zinc-400" />
-            <span className="font-semibold text-white">Acme Corp</span>
-            <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400 border border-zinc-700">
-              Pro Plan
-            </span>
-          </div>
-        </div>
+          {/* User Identity & New Project Action */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsCreateOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-semibold px-4 py-2 rounded-xl bg-white text-black hover:bg-zinc-200 transition-all shadow-sm active:scale-95"
+            >
+              <Plus className="w-4 h-4" />
+              <span>New Form Project</span>
+            </button>
 
-        {/* User Identity & New Project Action */}
-        <div className="flex items-center gap-3">
-          <div className="hidden sm:flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-full px-3 py-1 text-xs font-mono text-zinc-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span>ID: {userId}</span>
+            <UserNav />
           </div>
-
-          <button
-            onClick={() => setIsCreateOpen(true)}
-            className="flex items-center gap-1.5 text-xs font-semibold px-4 py-2 rounded-xl bg-white text-black hover:bg-zinc-200 transition-all shadow-sm active:scale-95"
-          >
-            <Plus className="w-4 h-4" />
-            <span>New Form Project</span>
-          </button>
-        </div>
-      </header>
+        </header>
 
       {/* Hero & Aggregate Stats */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 sm:p-12 space-y-10">
@@ -428,6 +418,7 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </AuthGuard>
   );
 }

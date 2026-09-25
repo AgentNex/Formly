@@ -1,9 +1,11 @@
 "use client";
 
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexAuthNextjsProvider } from "@convex-dev/auth/nextjs";
+import { ConvexReactClient } from "convex/react";
 import React, { ReactNode, useMemo, useState, useEffect } from "react";
+import { AuthProvider } from "@/lib/auth";
 
-const rawConvexUrl = process.env.NEXT_PUBLIC_CONVEX_URL?.trim();
+const rawConvexUrl = process.env.NEXT_PUBLIC_CONVEX_URL?.trim() || "";
 
 export function ConvexClientProvider({ children }: { children: ReactNode }) {
   const [mounted, setMounted] = useState(false);
@@ -13,23 +15,16 @@ export function ConvexClientProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const client = useMemo(() => {
-    if (!rawConvexUrl) {
-      return null;
-    }
-    try {
-      return new ConvexReactClient(rawConvexUrl);
-    } catch {
-      return null;
-    }
+    return new ConvexReactClient(rawConvexUrl || "https://placeholder.convex.cloud");
   }, []);
 
   if (!mounted) {
     return <div className="bg-black min-h-screen text-zinc-100">{children}</div>;
   }
 
-  if (client) {
-    return <ConvexProvider client={client}>{children}</ConvexProvider>;
-  }
-
-  return <>{children}</>;
+  return (
+    <ConvexAuthNextjsProvider client={client}>
+      <AuthProvider>{children}</AuthProvider>
+    </ConvexAuthNextjsProvider>
+  );
 }

@@ -113,13 +113,12 @@ export const list = query({
     status: v.optional(v.string()),
     search: v.optional(v.string()),
     limit: v.optional(v.number()),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db.get(args.formId);
     if (!form) return [];
 
-    await requireOrgMembership(ctx, form.orgId, "viewer", args.devToken);
+    await requireOrgMembership(ctx, form.orgId, "viewer");
 
     const maxResults = args.limit || 100;
     const rawSubs = await ctx.db
@@ -160,13 +159,12 @@ export const updateStatus = mutation({
   args: {
     submissionId: v.id("submissions"),
     status: v.string(), // "submitted" | "verified" | "flagged" | "archived"
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const sub = await ctx.db.get(args.submissionId);
     if (!sub) throw new Error("Submission not found");
 
-    await requireOrgMembership(ctx, sub.orgId, "editor", args.devToken);
+    await requireOrgMembership(ctx, sub.orgId, "editor");
 
     await ctx.db.patch(args.submissionId, {
       status: args.status,
@@ -179,13 +177,12 @@ export const updateStatus = mutation({
 export const exportAll = query({
   args: {
     formId: v.id("forms"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db.get(args.formId);
     if (!form) throw new Error("Form not found");
 
-    await requireOrgMembership(ctx, form.orgId, "analyst", args.devToken);
+    await requireOrgMembership(ctx, form.orgId, "analyst");
 
     const submissions = await ctx.db
       .query("submissions")

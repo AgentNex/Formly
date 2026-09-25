@@ -6,14 +6,13 @@ import { compileAndValidateGraph, RawNode, RawEdge } from "./compiler";
 export const getById = query({
   args: {
     formId: v.id("forms"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db.get(args.formId);
     if (!form) return null;
 
     // Verify tenant membership
-    await requireOrgMembership(ctx, form.orgId, "viewer", args.devToken);
+    await requireOrgMembership(ctx, form.orgId, "viewer");
 
     return form;
   },
@@ -23,7 +22,6 @@ export const getBySlug = query({
   args: {
     slug: v.string(),
     preview: v.optional(v.boolean()),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db
@@ -33,28 +31,35 @@ export const getBySlug = query({
 
     if (!form) return null;
 
-    // If preview mode requested, allow if authenticated with editor access
+    // If preview mode requested, allow if authenticated with editor access to this form's org
     if (args.preview) {
-      const viewer = await getViewer(ctx, args.devToken);
+      const viewer = await getViewer(ctx);
       if (viewer) {
-        // Return draft compilation for live previewing in editor
-        const nodes: RawNode[] = JSON.parse(form.nodes || "[]");
-        const edges: RawEdge[] = JSON.parse(form.edges || "[]");
-        const comp = compileAndValidateGraph(nodes, edges, form.title, form.description);
+        // Enforce membership for preview mode
+        const member = await ctx.db
+          .query("memberships")
+          .withIndex("by_org_user", (q) => q.eq("orgId", form.orgId).eq("userId", viewer._id))
+          .first();
+        if (member) {
+          // Return draft compilation for live previewing in editor
+          const nodes: RawNode[] = JSON.parse(form.nodes || "[]");
+          const edges: RawEdge[] = JSON.parse(form.edges || "[]");
+          const comp = compileAndValidateGraph(nodes, edges, form.title, form.description);
 
-        return {
-          formId: form._id,
-          versionId: null,
-          versionNumber: 0,
-          title: form.title,
-          description: form.description,
-          slug: form.slug,
-          status: form.status,
-          compiledSchema: comp.compiledSchema ? JSON.stringify(comp.compiledSchema) : null,
-          settings: form.settings || "{}",
-          validationErrors: comp.errors,
-          isPreview: true,
-        };
+          return {
+            formId: form._id,
+            versionId: null,
+            versionNumber: 0,
+            title: form.title,
+            description: form.description,
+            slug: form.slug,
+            status: form.status,
+            compiledSchema: comp.compiledSchema ? JSON.stringify(comp.compiledSchema) : null,
+            settings: form.settings || "{}",
+            validationErrors: comp.errors,
+            isPreview: true,
+          };
+        }
       }
     }
 
@@ -90,13 +95,12 @@ export const saveDraft = mutation({
     nodes: v.string(),
     edges: v.string(),
     settings: v.optional(v.string()),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db.get(args.formId);
     if (!form) throw new Error("Form not found");
 
-    const { user } = await requireOrgMembership(ctx, form.orgId, "editor", args.devToken);
+    const { user } = await requireOrgMembership(ctx, form.orgId, "editor");
 
     // Optimistic Concurrency Control (OCC)
     if (form.revision !== args.expectedRevision) {
@@ -139,13 +143,12 @@ export const publish = mutation({
   args: {
     formId: v.id("forms"),
     changeSummary: v.optional(v.string()),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db.get(args.formId);
     if (!form) throw new Error("Form not found");
 
-    const { user } = await requireOrgMembership(ctx, form.orgId, "editor", args.devToken);
+    const { user } = await requireOrgMembership(ctx, form.orgId, "editor");
 
     // 1. Strict Server Compilation Gate
     let nodes: RawNode[] = [];
@@ -206,7 +209,7 @@ export const publish = mutation({
     await ctx.db.insert("audit_logs", {
       orgId: form.orgId,
       actorId: user._id,
-      actorEmail: user.email,
+      actorEmail: user.email || "user@formly.local",
       action: "form.published",
       resourceType: "form",
       resourceId: form._id,
@@ -226,13 +229,12 @@ export const publish = mutation({
 export const unpublish = mutation({
   args: {
     formId: v.id("forms"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db.get(args.formId);
     if (!form) throw new Error("Form not found");
 
-    const { user } = await requireOrgMembership(ctx, form.orgId, "editor", args.devToken);
+    const { user } = await requireOrgMembership(ctx, form.orgId, "editor");
     const now = Date.now();
 
     await ctx.db.patch(form._id, {
@@ -244,7 +246,7 @@ export const unpublish = mutation({
     await ctx.db.insert("audit_logs", {
       orgId: form.orgId,
       actorId: user._id,
-      actorEmail: user.email,
+      actorEmail: user.email || "user@formly.local",
       action: "form.unpublished",
       resourceType: "form",
       resourceId: form._id,
@@ -258,13 +260,12 @@ export const unpublish = mutation({
 export const listVersions = query({
   args: {
     formId: v.id("forms"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db.get(args.formId);
     if (!form) return [];
 
-    await requireOrgMembership(ctx, form.orgId, "viewer", args.devToken);
+    await requireOrgMembership(ctx, form.orgId, "viewer");
 
     const versions = await ctx.db
       .query("form_versions")
@@ -287,13 +288,12 @@ export const rollbackToVersion = mutation({
   args: {
     formId: v.id("forms"),
     versionId: v.id("form_versions"),
-    devToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const form = await ctx.db.get(args.formId);
     if (!form) throw new Error("Form not found");
 
-    const { user } = await requireOrgMembership(ctx, form.orgId, "editor", args.devToken);
+    const { user } = await requireOrgMembership(ctx, form.orgId, "editor");
     const version = await ctx.db.get(args.versionId);
     if (!version || version.formId !== form._id) {
       throw new Error("Target version does not exist for this form.");
@@ -316,7 +316,7 @@ export const rollbackToVersion = mutation({
     await ctx.db.insert("audit_logs", {
       orgId: form.orgId,
       actorId: user._id,
-      actorEmail: user.email,
+      actorEmail: user.email || "user@formly.local",
       action: "form.rollback",
       resourceType: "form",
       resourceId: form._id,
