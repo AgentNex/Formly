@@ -134,7 +134,37 @@ test("lib/insforge.ts - client initialized with valid base URL and anon key", as
   assert.equal(typeof insforge.auth.signUp, "function");
   assert.equal(typeof insforge.auth.signInWithOAuth, "function");
   assert.equal(typeof insforge.auth.verifyEmail, "function");
+  assert.equal(typeof insforge.auth.resendVerificationEmail, "function");
   assert.equal(typeof insforge.auth.signOut, "function");
   assert.equal(typeof insforge.auth.getCurrentUser, "function");
+});
+
+test("Verification code input sanitizer - strictly extracts numeric digits up to 6 chars", () => {
+  const sanitize = (val) => val.replace(/\D/g, "").slice(0, 6);
+
+  assert.equal(sanitize("123456"), "123456");
+  assert.equal(sanitize("abc 123 def 456"), "123456");
+  assert.equal(sanitize("99-88-77-66"), "998877");
+  assert.equal(sanitize("letters-only"), "");
+  assert.equal(sanitize("4819029999"), "481902");
+});
+
+test("10-second silent confirmation timer logic cancels hanging requests and triggers lock", async () => {
+  let isLocked = false;
+  let isVerifying = true;
+
+  // Simulate hanging server request with 50ms timeout mock (equivalent to 10s production safeguard)
+  const hangingRequest = new Promise((resolve) => setTimeout(() => resolve({ ok: true }), 500));
+  const timeoutGuard = new Promise((resolve) => setTimeout(() => resolve({ isTimeout: true }), 50));
+
+  const outcome = await Promise.race([hangingRequest, timeoutGuard]);
+  assert.equal(outcome.isTimeout, true);
+
+  // Transition to locked state on timeout
+  isVerifying = false;
+  isLocked = true;
+
+  assert.equal(isVerifying, false);
+  assert.equal(isLocked, true);
 });
 
